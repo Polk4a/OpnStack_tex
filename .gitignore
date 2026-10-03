@@ -12,3 +12,5 @@
 *.xml
 *.aux
 *.gz
+*.sh
+*.dvi

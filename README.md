@@ -3,7 +3,10 @@
 Structure LaTeX d'un cours sur OpenStack, basée sur le template INSA CVL
 (`info_quantiq_tex`) : charte rouge/gris, en-tête avec logo, page de titre, sommaire,
 glossaire, bibliographie biblatex/APA. **Un chapitre = un fichier `chap_<nom>.tex`.**
-Les chapitres de services et la conclusion sont volontairement vides (titre + `\label`).
+**Avancement :** introduction/présentation (squelette), **chapitre Keystone complet**
+(schémas TikZ, exercices corrigés, récapitulatif). Les autres chapitres de service et la
+conclusion sont encore vides (titre + `\label`) ; ils seront rédigés selon les mêmes règles
+(voir « Conventions des chapitres rédigés »).
 
 ## Compilation
 
@@ -26,7 +29,7 @@ main.tex              Préambule, informations du document, ordre des chapitres
 pagetitre.tex         Page de titre (motif : services / API REST / infrastructure)
 introduction.tex      Introduction (non numérotée) : présentation du cours et plan
 chap_presentation.tex 1.  Présentation générale d'OpenStack (sous-sections seulement)
-chap_keystone.tex     2.  Keystone : identité
+chap_keystone.tex     2.  Keystone : identité  (RÉDIGÉ, ~39 pages)
 chap_nova.tex         3.  Nova : calcul
 chap_placement.tex    4.  Placement : suivi des ressources
 chap_glance.tex       5.  Glance : images
@@ -41,8 +44,8 @@ chap_magnum.tex       13. Magnum : Kubernetes managé
 chap_trove.tex        14. Trove : bases de données (DBaaS)
 chap_deploiement.tex  15. Méthodes de déploiement (hors service)
 conclusion.tex        Conclusion (non numérotée, vide)
-glossaire.tex         Entrées du glossaire (3 exemples)
-sources.bib           Bibliographie (documentation OpenStack, Trove)
+glossaire.tex         Entrées du glossaire (~33 entrées, vocabulaire Keystone)
+sources.bib           Bibliographie (27 entrées @online : documentation OpenStack, Keystone, Trove)
 images/               logo_insa.png à y déposer
 ```
 
@@ -69,9 +72,66 @@ pour réordonner ou retirer un chapitre, déplacer ou supprimer une ligne.
 
 - Encadrés : `definition`, `resultat`, `remarque`, `aretenir`, `savoirfaire`, `exercice`,
   `correction` (voir `main.tex`).
-- Styles TikZ pour les schémas d'architecture : `svc` (service), `svcgris` (composant
-  secondaire), `bus` (barre API/bus), `flux` (flèche).
+- Styles TikZ du template pour les schémas d'architecture : `svc` (service), `svcgris`
+  (composant secondaire), `bus` (barre API/bus), `flux` (flèche).
 - Code : styles `listings` `terminal`, `darkterminal`, `verbatimlike`, macro `\prompt`.
 - Renvois : `\label`/`\ref` préfixés (`chap:`, `sec:`, `fig:`, `ex:`). Un chapitre a pour
   label `chap:<nom>` (ex. `\ref{chap:keystone}`).
 - Glossaire : `\gls{iaas}` ; bibliographie : `\parencite{openstack-docs}`.
+
+## Schémas TikZ (style de la page 5 de la présentation Trove)
+
+Les styles sont définis dans `main.tex` (second `\tikzset`) et réutilisables dans tous les
+chapitres. Chaque schéma est un `figure[!ht]` avec `\adjustbox{max width=\linewidth}` autour du
+`tikzpicture` (il s'adapte donc à la largeur du texte), une légende qui explique les
+numéros, et un `\label{fig:<service>-<sujet>}`.
+
+| Style | Usage |
+|---|---|
+| `pcli` | client / acteur (pastille blanche, bord rouge) |
+| `pfoc` | service au centre de la figure (rouge plein) |
+| `psvc` | autres services OpenStack (pêche) |
+| `pdat` | données, objets stockés (rose) |
+| `pgris` | infrastructure, composant externe (gris) |
+| `etiqf` | étiquette de flèche (petite, grise) |
+| `fluxo`, `fluxr`, `fluxd` | flèches orange (appel de service), rouge (requête client), pointillée (asynchrone ou externe) |
+| `num` | pastille rouge numérotée (étapes 1, 2, 3 de la légende) |
+| `callout` | bandeau pêche sous la figure : le message à retenir |
+| `acteur`, `vie`, `msg`, `rep` | diagrammes de séquence |
+
+Pour un diagramme de séquence : `acteur` (boîte en tête), `vie` (ligne de vie pointillée) et les
+macros `\seqmsg{x1}{x2}{y}{num}{texte}` (requête, flèche pleine) et `\seqrep{x1}{x2}{y}{num}{texte}`
+(réponse, flèche pointillée). Exemple complet : figure « Connexion fédérée par navigateur » dans
+`chap_keystone.tex`.
+
+Règles TikZ à connaître : ne pas mettre `\\` dans un groupe `{}` imbriqué d'un nœud
+`align=center` ; préférer un nœud explicite (`\node[etiqf] at (x,y) {…}`) à `node` placé après la
+destination d'un `to[...]` (le nœud se retrouve alors sur la destination, pas sur la courbe).
+
+## Conventions des chapitres rédigés
+
+- Un chapitre = une `\section{…}\label{chap:<nom>}` ; sous-sections `sec:<nom>-<sujet>`,
+  figures `fig:<nom>-…`, tableaux `tab:<nom>-…`, exercices `ex:<nom>-…`.
+- Contenu type : rôle du service et place dans OpenStack (schéma structure + interactions) ;
+  concepts ; architecture interne ; configuration et commandes ; exploitation et diagnostic ;
+  sécurité et limites ; exercices corrigés ; récapitulatif (schéma de synthèse, `aretenir`,
+  tableau de commandes, `savoirfaire`).
+- Exercices : environnement `exercice` suivi d'un environnement `correction` ; ils se numérotent
+  `section.n` automatiquement.
+- Code : `\begin{lstlisting}[style=terminal]` pour les sessions shell (lignes précédées de `$ `),
+  `\begin{lstlisting}` seul pour les fichiers de configuration ou le JSON. Les blocs courts
+  sont placés dans un `minipage` (ils ne se coupent pas entre deux pages).
+- Sources : `\parencite{clé}` ; chaque affirmation technique renvoie à la documentation officielle
+  (fichier `sources.bib`). Les entrées `@online` portent `urldate` ; faute de date de
+  publication, biblatex-apa affiche « s. d.-a », « s. d.-b »… (comportement normal d'APA pour
+  plusieurs documents du même auteur sans date).
+- Glossaire : un terme est défini dans `glossaire.tex` puis cité avec `\gls{…}`.
+
+## Réglages ajoutés au préambule
+
+- `microtype` sans protrusion/expansion/kerning (il casse les ligatures dans `\texttt`) et
+  `\DisableLigatures` pour la police à chasse fixe : `--option` s'affiche correctement.
+- `upquote=true` dans `\lstset` : apostrophes droites dans les listings (commandes shell, SQL).
+- `\emergencystretch=2em` : évite la plupart des débordements de ligne.
+- Paquets ajoutés : `adjustbox`, `tikz` (bibliothèques `positioning`, `arrows.meta`,
+  `fit`, `backgrounds`, `calc`, `shapes.geometric`, etc. : voir `main.tex`).

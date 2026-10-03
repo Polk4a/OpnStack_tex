@@ -2,10 +2,2637 @@
 %  Chapitre « Keystone : le service d'identité »
 %  Fichier importé par main.tex avec \include{chap_keystone}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : supports « Introduction à OpenStack » (parties 4 et 13) et « Chapitre 5 »
+%  (partie 1), documentation officielle de Keystone (voir sources.bib).
 % =====================================================================
 
+% =====================================================================
 \section{Keystone : le service d'identité}\label{chap:keystone}
+% =====================================================================
+
+Ce chapitre présente Keystone, le service d'identité d'OpenStack. Chaque appel d'API à Nova,
+Neutron, Cinder ou Glance commence par une vérification auprès de Keystone : c'est le premier
+service à comprendre. On part de son rôle et des concepts qu'il manipule (domaines, projets,
+utilisateurs, rôles), puis on suit un token de sa création à sa validation et l'on voit comment les
+clients trouvent les autres services grâce au catalogue. Viennent ensuite l'architecture interne, les
+sources d'identité (SQL, LDAP, fédération), les mécanismes avancés (application credentials, trusts,
+authentification multifacteur, limites unifiées), le rôle de \texttt{keystonemiddleware} côté service, la
+mise en œuvre et la sécurité. Le chapitre se termine par des exercices corrigés et un récapitulatif. Les
+définitions de référence sont celles de la documentation officielle \parencite{keystone-concepts}.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Keystone}\label{sec:ks-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Keystone}
+Keystone est le service d'identité d'OpenStack (projet \emph{Identity}). Il authentifie les
+utilisateurs et les services, délivre des \glspl{token}, conserve les domaines, les projets, les
+groupes et les rôles, et publie le \gls{catalogue} des endpoints de tous les services.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Comment authentifier les utilisateurs et les services, et savoir ce que
+        chacun a le droit de faire ?
+  \item \textbf{Rôle.} Gérer les utilisateurs, les projets (anciennement « tenants »), les rôles, les
+        tokens, les domaines et le catalogue des endpoints des autres services.
+  \item \textbf{Communique avec.} Tous les services OpenStack : chaque appel API à Nova, Neutron,
+        Cinder\dots{} commence par une vérification auprès de Keystone.
+  \item \textbf{Exemple.} Un utilisateur s'authentifie et obtient un token, qui prouve son identité
+        pour toutes ses requêtes suivantes, sans ressaisir son mot de passe.
+\end{itemize}
+
+\subsubsection{Authentification et autorisation}
+
+Deux questions distinctes se posent à chaque requête. Keystone répond à la première et fournit les
+éléments de réponse à la seconde.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{@{}p{3.1cm}p{5.4cm}p{6.6cm}@{}}
+\toprule
+ & \textbf{\Gls{authentification}} & \textbf{\Gls{autorisation}} \\
+\midrule
+Question & « Qui êtes-vous ? » & « Qu'avez-vous le droit de faire ? » \\
+Réponse & Keystone vérifie les identifiants (mot de passe, token existant, etc.) et délivre un
+  token temporaire. & Le rôle de l'utilisateur sur un projet (\texttt{admin}, \texttt{member},
+  \dots) est inscrit dans le token ; chaque service applique ses propres règles
+  (\gls{policy}). \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{Place dans l'architecture d'OpenStack}
+
+OpenStack est un ensemble de services indépendants. Chacun expose une API REST, communique avec les
+autres par ces API et par un bus de messages interne, et s'appuie sur des bases de données. Horizon et
+la ligne de commande ne sont que des clients de ces API. Keystone est le seul service que tous les
+autres consultent (figure~\ref{fig:ks-structure}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  % clients
+  \node[pcli, minimum width=15.8cm] (cli) at (7.9,8.0)
+    {Clients : CLI \texttt{openstack} \ $\cdot$ \ Horizon \ $\cdot$ \ SDK et applications (API REST)};
+  % Keystone au centre de l'interaction
+  \node[pfoc, minimum width=3.2cm, minimum height=2.4cm] (ks) at (2.6,4.1)
+    {Keystone\\[3pt]{\scriptsize\mdseries identité, tokens,}\\{\scriptsize\mdseries catalogue de services}};
+  \node[pgris, minimum width=3.2cm, font=\scriptsize\bfseries] (bk) at (2.6,1.0)
+    {SQL $\cdot$ LDAP\\ IdP externe};
+  % conteneur des services
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (6.2,1.95) rectangle (15.8,6.6);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (6.35,6.5)
+    {Services OpenStack (chacun expose sa propre API REST)};
+  \foreach \y/\lab in {5.4/Calcul, 4.45/Réseau, 3.5/{Stockage et images},
+                       2.55/{Orchestration et services avancés}} {
+    \node[anchor=west, font=\scriptsize\itshape, text=insagris, text width=2.5cm] at (6.35,\y) {\lab};
+  }
+  \foreach \x/\y/\n in {9.9/5.4/Nova, 11.95/5.4/Placement, 14.0/5.4/Ironic,
+                        9.9/4.45/Neutron, 11.95/4.45/Octavia,
+                        9.9/3.5/Cinder, 11.95/3.5/Swift, 14.0/3.5/Glance,
+                        9.9/2.55/Heat, 11.95/2.55/Magnum, 14.0/2.55/Trove} {
+    \node[psvc, minimum width=1.95cm, font=\scriptsize\bfseries] at (\x,\y) {\n};
+  }
+  % infrastructure commune
+  \node[pgris, minimum width=9.6cm, font=\scriptsize\bfseries] (bus) at (11.0,1.0)
+    {Bus de messages (RabbitMQ) \ $\cdot$ \ bases de données SQL};
+  \node[pgris, minimum width=9.6cm, font=\scriptsize\bfseries] (inf) at (11.0,0.15)
+    {Hyperviseurs KVM/QEMU \ $\cdot$ \ serveurs \ $\cdot$ \ réseau et disques physiques};
+  \foreach \x in {8,11,14} \draw[insagris, thick] (\x,1.95) -- (\x,1.325);
+  % flux
+  \draw[fluxr] (cli.south -| ks.north) -- (ks.north)
+    node[num, midway] {1} node[etiqf, midway, right=5mm] {identifiants\\ $\rightarrow$ token};
+  \draw[fluxr] (11.0,7.675) -- (11.0,6.6)
+    node[num, midway] {2} node[etiqf, midway, right=5mm] {requête API + token};
+  \draw[fluxo] (6.2,4.1) -- (ks.east)
+    node[num, midway, above=3pt] {3}
+    node[etiqf, midway, below=2pt, text width=1.9cm] {valident le token, retrouvent les endpoints};
+  \draw[<->, thick, insagris] (ks.south) -- (bk.north)
+    node[etiqf, midway, right=2pt] {stocke / lit};
+  \node[callout, minimum width=15.8cm] at (7.9,-1.0)
+    {Keystone ne remplace aucun service : tous le consultent, à chaque requête.};
+\end{tikzpicture}}
+\caption{Structure d'OpenStack et place de Keystone. Les clients s'authentifient auprès de Keystone
+(1), puis appellent l'API REST de chaque service avec le token obtenu (2). Chaque service valide ce
+token auprès de Keystone et retrouve dans le catalogue les endpoints des autres services (3).
+Keystone s'appuie sur ses propres annuaires : base SQL, LDAP, fournisseur d'identité externe.}
+\label{fig:ks-structure}
+\end{figure}
+
+La figure~\ref{fig:ks-env} zoome sur l'environnement immédiat de Keystone, sur le modèle des schémas
+d'interaction : à gauche et à droite, ce dont Keystone dépend (stockage, cache, annuaires, bus de
+messages) ; en bas, les services qui le consultent.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=5cm] (cli) at (0,3.6) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.2cm, minimum height=1.0cm] (ks) at (0,0) {Keystone};
+  % dépendances de Keystone (à gauche : stockage et cache, à droite : annuaires et bus)
+  \node[pdat, minimum width=3.4cm] (sql) at (-6.0,0.9) {Base SQL (MariaDB)};
+  \node[pgris, minimum width=3.4cm] (mc) at (-6.0,-1.1) {Cache (memcached)};
+  \node[pgris, minimum width=3.4cm] (ldap) at (6.0,1.1) {Annuaire LDAP / AD};
+  \node[pgris, minimum width=3.4cm] (idp) at (6.0,-1.1) {IdP externe\\ SAML2 / OIDC};
+  \node[pgris, minimum width=3.4cm] (bus) at (6.0,3.6) {Bus de messages};
+  % services qui consultent Keystone
+  \foreach \x/\n in {-6/Nova, -3/Neutron, 0/Glance, 3/Cinder, 6/Swift} {
+    \node[psvc, minimum width=2.2cm] (s\n) at (\x,-3.9) {\n};
+    \draw[fluxo] (s\n.north) -- (ks.south);
+  }
+  \node[etiqf] at (0,-2.3) {valident le token,\\ lisent le catalogue};
+  % flux
+  \draw[fluxr] (cli.south) -- (ks.north)
+    node[etiqf, midway, right=2pt] {Requête REST\\ \texttt{POST /v3/auth/tokens}};
+  \draw[<->, thick, insagris] (ks.west) -- (sql.east)
+    node[etiqf, midway, above=1pt, text width=2.0cm] {identités, rôles, catalogue};
+  \draw[<->, thick, insagris] (ks.west) -- (mc.east)
+    node[etiqf, midway, below=1pt] {cache};
+  \draw[fluxr] (ks.east) -- (ldap.west)
+    node[etiqf, midway, above=1pt] {lecture seule};
+  \draw[fluxd] (idp.west) -- (ks.east)
+    node[etiqf, midway, below=1pt] {assertion signée};
+  \draw[fluxd] (ks.north east) to[out=50,in=180] (bus.west);
+  \node[etiqf, fill=white, inner sep=1pt] at (3.2,3.0) {notifications CADF};
+  \node[callout, text width=13.2cm] at (0,-5.5)
+    {Keystone est un point de passage obligé : indisponible, il bloque les authentifications puis,
+     une fois les caches expirés, la validation des tokens.};
+\end{tikzpicture}}
+\caption{Keystone et son environnement. Flèches orange : appels des services vers Keystone ;
+flèches rouges : requêtes des clients et lecture de l'annuaire ; flèches pointillées : échanges
+asynchrones ou externes (assertion d'un fournisseur d'identité, notifications d'audit).}
+\label{fig:ks-env}
+\end{figure}
+
+Le tableau~\ref{tab:ks-services} résume ce que chaque grand service attend de Keystone. Tous suivent
+le même schéma de base : un compte de service, la validation des tokens entrants et
+l'enregistrement de leurs endpoints dans le catalogue (sections~\ref{sec:ks-catalogue}
+et~\ref{sec:ks-middleware}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.3cm}p{12.2cm}@{}}
+\toprule
+\textbf{Service} & \textbf{Ce qu'il attend de Keystone} \\
+\midrule
+Horizon & Connexion de l'utilisateur (mot de passe ou fédération \emph{Web SSO}), puis choix du projet,
+  c'est-à-dire un token limité à ce projet (section~\ref{sec:ks-federation}). \\
+Nova & Valider le token de chaque requête ; il appelle ensuite Glance, Neutron et Cinder, qui valident
+  à leur tour le token auprès de Keystone. \\
+Neutron, Cinder, Glance, Placement, Octavia, Ironic & Même schéma : un compte de service, la validation
+  des tokens entrants et un endpoint dans le catalogue. \\
+Swift & Peut déléguer l'authentification à Keystone au lieu de gérer ses propres comptes. \\
+Heat, Magnum & Agissent au nom de l'utilisateur pendant la vie d'une stack ou d'un cluster, grâce aux
+  \emph{trusts} (section~\ref{sec:ks-avance}). \\
+Trove & Authentifie les requêtes via Keystone ; ses opérations passent par Nova, Neutron, Cinder et
+  Swift, qui valident chacun le token. \\
+\bottomrule
+\end{tabular}
+\caption{Les services OpenStack face à Keystone.}
+\label{tab:ks-services}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts fondamentaux}\label{sec:ks-concepts}
+% ---------------------------------------------------------------------
+
+Keystone manipule un petit nombre d'objets. Le tableau~\ref{tab:ks-objets} les résume avec la commande
+qui crée chacun ; la figure~\ref{fig:ks-modele} montre comment ils s'articulent.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.9cm}p{7.9cm}>{\raggedright\arraybackslash}p{4.7cm}@{}}
+\toprule
+\textbf{Objet} & \textbf{Définition} & \textbf{Création} \\
+\midrule
+\Gls{utilisateur} & Représentation numérique d'une personne, d'un système ou d'un service, avec ses
+  identifiants. & \texttt{openstack user create} \\
+\Gls{groupe} & Ensemble d'utilisateurs d'un domaine ; un rôle attribué au groupe vaut pour tous
+  ses membres. & \texttt{openstack group create} \\
+\Gls{projet} & Conteneur qui regroupe ou isole des ressources (client, équipe, application) ;
+  ancien nom : \emph{tenant}. & \texttt{openstack project create} \\
+\Gls{domaine} & Conteneur de plus haut niveau : projets, utilisateurs et groupes d'une même entité
+  administrative. & \texttt{openstack domain create} \\
+\Gls{role} & Ensemble de droits que les services interprètent pour décider des accès. &
+  \texttt{openstack role create} \\
+Affectation de rôle & Lien entre un acteur (utilisateur ou groupe), un rôle et une cible (projet,
+  domaine ou système). & \texttt{openstack role add} \\
+Service & Un service OpenStack (Compute, Image, Object Storage\dots) qui fournit un ou plusieurs
+  endpoints. & \texttt{openstack service create} \\
+\Gls{endpoint} & Adresse réseau (URL) par laquelle on accède à un service. &
+  \texttt{openstack endpoint create} \\
+\Gls{region} & Division générale d'un déploiement, pouvant contenir des sous-régions. &
+  \texttt{openstack region create} \\
+\Gls{token} & Chaîne qui prouve l'identité de son porteur, valide un temps limité. &
+  \texttt{openstack token issue} \\
+\bottomrule
+\end{tabular}
+\caption{Les objets de Keystone \parencite{keystone-concepts,keystone-services}.}
+\label{tab:ks-objets}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[psvc, minimum width=3.0cm] (dom) at (7.0,5.6) {Domaine};
+  \node[pdat, minimum width=2.6cm] (usr) at (1.3,3.4) {Utilisateur};
+  \node[pdat, minimum width=2.2cm] (grp) at (5.4,3.4) {Groupe};
+  \node[psvc, minimum width=2.2cm] (prj) at (9.6,3.4) {Projet};
+  \node[psvc, minimum width=2.8cm] (sub) at (13.4,3.4) {Sous-projet};
+  \node[pfoc, minimum width=4.6cm, minimum height=0.9cm] (aff) at (5.0,0.8) {Affectation de rôle};
+  \node[pcli, minimum width=2.0cm] (rol) at (10.3,0.8) {Rôle};
+  % appartenance
+  \draw[flux] (dom.south) -- (usr.north) node[etiqf, near end, left=2pt] {contient};
+  \draw[flux] (dom.south) -- (grp.north);
+  \draw[flux] (dom.south) -- (prj.north);
+  \draw[flux] (usr.east) -- (grp.west) node[etiqf, midway, above=1pt] {membre de};
+  \draw[flux] (prj.east) -- (sub.west) node[etiqf, midway, above=1pt] {parent};
+  % affectation
+  \draw[fluxr] (usr.south) -- (aff.north west) node[etiqf, midway, left=2pt] {acteur};
+  \draw[fluxr] (grp.south) -- (aff.north -| grp.south);
+  \draw[fluxr] (rol.west) -- (aff.east) node[etiqf, midway, above=1pt] {rôle};
+  \draw[fluxr] (aff.north east) -- (prj.south)
+    node[etiqf, near start, right=4pt, text width=2.6cm] {cible : projet, domaine ou système};
+  \node[callout, minimum width=15.0cm] at (7.0,-0.65)
+    {Une affectation = (utilisateur ou groupe, rôle, projet, domaine ou système).};
+\end{tikzpicture}}
+\caption{Modèle de données de Keystone. Un domaine contient des utilisateurs, des groupes et des
+projets (éventuellement hiérarchiques). Les droits ne sont pas portés par l'utilisateur lui-même : ils
+résultent d'affectations de rôle.}
+\label{fig:ks-modele}
+\end{figure}
+
+Deux conséquences pratiques en découlent. D'abord, les noms d'utilisateur et de projet se lisent dans
+un domaine : à l'authentification, on précise donc le domaine de l'utilisateur et celui du projet
+(\texttt{OS\_USER\_DOMAIN\_NAME}, \texttt{OS\_PROJECT\_DOMAIN\_NAME}, section~\ref{sec:ks-deploiement}).
+Ensuite, un utilisateur sans affectation de rôle peut s'authentifier mais n'a de droits sur rien.
+
+% ---------------------------------------------------------------------
+\subsection{Domaines, projets et multi-tenance}\label{sec:ks-domaines}
+% ---------------------------------------------------------------------
+
+Un \gls{domaine} est le conteneur de plus haut niveau de Keystone. Il regroupe les projets, les
+utilisateurs et les groupes qui appartiennent à une même entité administrative (une entreprise, un
+client d'un hébergeur, un département). Un domaine peut avoir son propre annuaire d'identité,
+SQL ou LDAP (section~\ref{sec:ks-backends}), et ses propres administrateurs délégués.
+
+\begin{pointcle}
+Isolation entre domaines : par défaut, un utilisateur du domaine \og entreprise-A \fg{} ne peut ni voir
+ni utiliser les projets du domaine \og entreprise-B \fg, même si les deux s'exécutent sur le même
+cluster OpenStack physique. C'est la base de la multi-tenance à l'échelle d'un hébergeur.
+\end{pointcle}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  % cadre : un seul cloud
+  \draw[insagris, thick, rounded corners=6pt] (0,0) rectangle (15.4,7.6);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insagris] at (0.2,7.5)
+    {Un seul cloud OpenStack (même cluster physique)};
+  % domaine A
+  \draw[insarouge, thick, rounded corners=6pt, fill=insarouge!4] (0.4,2.0) rectangle (7.2,6.7);
+  \node[anchor=north west, font=\small\bfseries, text=insarouge] at (0.6,6.6) {Domaine « entreprise-A »};
+  \node[psvc, minimum width=2.8cm, minimum height=1.3cm] (pa1) at (2.1,4.4)
+    {Projet prod\\[1pt]{\scriptsize\mdseries alice, bob}};
+  \node[psvc, minimum width=2.8cm, minimum height=1.3cm] (pa2) at (5.5,4.4)
+    {Projet dev\\[1pt]{\scriptsize\mdseries carol}};
+  \node[pgris, minimum width=6.0cm, font=\scriptsize\bfseries] at (3.8,2.7)
+    {Annuaire propre : utilisateurs et groupes};
+  % domaine B
+  \draw[insarouge, thick, rounded corners=6pt, fill=insarouge!4] (8.2,2.0) rectangle (15.0,6.7);
+  \node[anchor=north west, font=\small\bfseries, text=insarouge] at (8.4,6.6) {Domaine « entreprise-B »};
+  \node[psvc, minimum width=2.8cm, minimum height=1.3cm] (pb1) at (9.9,4.4)
+    {Projet web\\[1pt]{\scriptsize\mdseries dave}};
+  \node[psvc, minimum width=2.8cm, minimum height=1.3cm] (pb2) at (13.3,4.4)
+    {Projet batch\\[1pt]{\scriptsize\mdseries erin}};
+  \node[pgris, minimum width=6.0cm, font=\scriptsize\bfseries] at (11.6,2.7)
+    {Annuaire propre : utilisateurs et groupes};
+  % isolation
+  \node[font=\Huge\bfseries, text=insarouge] at (7.7,4.4) {$\times$};
+  \node[etiqf, text width=1.5cm] at (7.7,5.5) {isolation};
+  % services partagés
+  \node[pgris, minimum width=14.4cm, font=\scriptsize\bfseries] (sh) at (7.7,0.8)
+    {Services partagés : Nova, Neutron, Cinder\dots \ -- \ ressources et droits attribués par projet};
+  \foreach \x in {2.1,5.5,9.9,13.3} \draw[insaorange, thick] (\x,3.75) -- (\x,3.1);
+  \foreach \x in {3.8,11.6} \draw[insaorange, thick] (\x,2.4) -- (\x,2.0);
+  \node[callout, minimum width=15.4cm] at (7.7,-0.7)
+    {Même cluster physique, mais deux mondes étanches.};
+\end{tikzpicture}}
+\caption{Multi-tenance par domaines. Les utilisateurs cités ont un rôle sur le projet indiqué ; chaque
+domaine garde son propre annuaire. Les ressources des services partagés sont rattachées aux projets.}
+\label{fig:ks-domaines}
+\end{figure}
+
+Les projets peuvent être hiérarchiques : un projet peut avoir un projet parent, ce qui permet de
+structurer les limites de ressources (section~\ref{sec:ks-avance}). Les commandes suivantes créent
+le domaine, ses projets, un utilisateur et un groupe de la figure~\ref{fig:ks-domaines}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack domain create entreprise-A
+$ openstack project create --domain entreprise-A prod
+$ openstack project create --domain entreprise-A --parent prod prod-api
+$ openstack user create --domain entreprise-A --password-prompt alice
+$ openstack group create --domain entreprise-A devs
+$ openstack group add user --group-domain entreprise-A --user-domain entreprise-A devs alice
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Rôles et contrôle d'accès}\label{sec:ks-rbac}
+% ---------------------------------------------------------------------
+
+Keystone applique un contrôle d'accès fondé sur les rôles (\gls{rbac}). Un \gls{role} est un
+ensemble de droits ; il est attribué à un utilisateur ou à un groupe sur une cible, par une
+affectation de rôle. Pour un utilisateur, les rôles effectifs sur un projet sont ceux qu'il a reçus
+directement, ceux de ses groupes, et ceux hérités (voir plus bas).
+
+\subsubsection{Trois portées}
+
+Une affectation s'applique à l'une de trois \glspl{portee} \parencite{keystone-roles} :
+\begin{itemize}
+  \item \textbf{système} : opérations qui touchent l'ensemble du déploiement ;
+  \item \textbf{domaine} : contenu d'un domaine ;
+  \item \textbf{projet} : ressources d'un projet.
+\end{itemize}
+
+\subsubsection{Rôles par défaut}
+
+Keystone fournit cinq rôles par défaut. Quatre forment une hiérarchie : le rôle \texttt{admin} implique
+\texttt{manager}, qui implique \texttt{member}, qui implique \texttt{reader}. Le cinquième,
+\texttt{service}, est autonome (figure~\ref{fig:ks-roles}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=2.4cm] (adm) at (1.4,3.2) {admin};
+  \node[pdat, minimum width=2.4cm] (man) at (5.0,3.2) {manager};
+  \node[pdat, minimum width=2.4cm] (mem) at (8.6,3.2) {member};
+  \node[pdat, minimum width=2.4cm] (rea) at (12.2,3.2) {reader};
+  \draw[fluxr] (adm.east) -- (man.west) node[etiqf, midway, above=1pt] {implique};
+  \draw[fluxr] (man.east) -- (mem.west) node[etiqf, midway, above=1pt] {implique};
+  \draw[fluxr] (mem.east) -- (rea.west) node[etiqf, midway, above=1pt] {implique};
+  \node[font=\scriptsize\itshape, text=insagris, text width=2.8cm, align=center] at (1.4,4.15)
+    {le plus privilégié};
+  \node[font=\scriptsize\itshape, text=insagris, text width=2.8cm, align=center] at (12.2,4.15)
+    {lecture seule};
+  \node[pgris, dashed, minimum width=2.4cm] (srv) at (6.8,1.5) {service};
+  \node[etiqf, text width=6.0cm] at (11.0,1.5) {autonome : communication entre services};
+  \draw[insagris, thick, decorate, decoration={brace, amplitude=5pt}] (0.1,0.5) -- (13.5,0.5);
+  \node[font=\scriptsize, text=insagris] at (6.8,0.05) {un rôle s'attribue sur l'une de ces trois portées};
+  \foreach \x/\n in {1.9/Système, 6.8/Domaine, 11.7/Projet} {
+    \node[psvc, minimum width=3.4cm] at (\x,-0.8) {\n};
+  }
+\end{tikzpicture}}
+\caption{Rôles par défaut de Keystone et portées d'attribution \parencite{keystone-roles}. Les droits
+d'un rôle \texttt{admin} ne se transmettent pas d'une portée à l'autre.}
+\label{fig:ks-roles}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\ttfamily}p{2.1cm}p{3.0cm}p{10.3cm}@{}}
+\toprule
+\textbf{Rôle} & \textbf{Introduit} & \textbf{Rôle dans la hiérarchie} \\
+\midrule
+reader  & Rocky       & Accès en lecture seule aux ressources d'un système, d'un domaine ou d'un projet. \\
+member  & Rocky       & Niveau intermédiaire entre \texttt{reader} et \texttt{admin} ; sans pouvoir propre
+                         dans Keystone, il donne une granularité supplémentaire aux autres services. \\
+manager & 2023.2      & Entre \texttt{member} et \texttt{admin} ; conçu pour une affectation de domaine : gérer
+                         utilisateurs, projets, groupes et affectations du domaine. \\
+admin   & Rocky       & Opérations les plus privilégiées d'une portée donnée. \\
+service & 2023.2      & Communication de service à service ; hors hiérarchie. \\
+\bottomrule
+\end{tabular}
+\caption{Les cinq rôles par défaut \parencite{keystone-roles}.}
+\label{tab:ks-roles}
+\end{table}
+
+\subsubsection{Qui décide ?}
+
+Keystone enregistre les affectations et inscrit les rôles dans le token. Il ne décide pas de ce qu'un
+rôle permet : chaque service évalue ses propres règles d'accès, ses \glspl{policy}, par la
+bibliothèque \texttt{oslo.policy}. Les règles par défaut sont définies dans le code du service ; un
+opérateur peut les remplacer en fournissant un fichier de règles. Grâce aux rôles impliqués, une règle
+écrite pour \texttt{reader} s'applique aussi à \texttt{member}, \texttt{manager} et \texttt{admin}
+\parencite{keystone-roles}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# policy.yaml (exemple generique) : lecture autorisee a tout porteur du role reader
+"identity:list_foo": "role:reader"
+\end{lstlisting}
+\end{minipage}\par
+
+\subsubsection{Gérer les affectations}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack role create auditeur
+$ openstack role add --user alice --user-domain entreprise-A \
+      --project prod --project-domain entreprise-A member
+$ openstack role add --group devs --group-domain entreprise-A \
+      --domain entreprise-A reader
+$ openstack role add --user admin --user-domain Default --system all admin
+$ openstack role assignment list --user alice --user-domain entreprise-A --names
+$ openstack role assignment list --user alice --user-domain entreprise-A --effective --names
+\end{lstlisting}
+\end{minipage}\par
+
+L'option \texttt{--effective} développe les affectations : groupes, rôles impliqués et rôles hérités.
+Une affectation faite sur un domaine avec \texttt{--inherited} s'applique à tous les projets de ce
+domaine, sans s'appliquer au domaine lui-même. Un rôle peut aussi en impliquer un autre, comme le fait
+la hiérarchie par défaut : \texttt{openstack implied role create admin --implied-role member}.
+
+% ---------------------------------------------------------------------
+\subsection{Authentification et tokens}\label{sec:ks-tokens}
+% ---------------------------------------------------------------------
+
+Keystone ne revérifie pas le mot de passe de l'utilisateur à chaque requête. Il l'échange une fois
+contre un \gls{token}, que le client présente ensuite à tous les services. Cette section suit le
+token de sa création à sa validation, puis décrit ses portées, ses formats et la gestion des clés.
+
+\subsubsection{Qu'est-ce qu'un token ?}
+
+\begin{definition}{Token}
+Un token est une chaîne opaque, délivrée par Keystone, qui prouve l'identité de son porteur pendant
+une durée limitée. Le client la transmet dans l'en-tête HTTP \texttt{X-Auth-Token} de chaque requête
+vers un service OpenStack \parencite{keystone-tokens}.
+\end{definition}
+
+Un token n'est pas qu'une preuve d'identité : il décrit aussi ce que son porteur peut faire et où.
+Le tableau~\ref{tab:ks-token-champs} liste les informations que Keystone associe à un token. Elles
+ne sont pas toutes dans la chaîne elle-même : pour un token Fernet, Keystone les reconstruit à
+partir de ses bases à chaque validation (section~\ref{sec:ks-formats}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\ttfamily}p{2.6cm}>{\raggedright\arraybackslash}p{12.9cm}@{}}
+\toprule
+\textbf{Champ} & \textbf{Contenu} \\
+\midrule
+methods    & Méthodes d'authentification utilisées : \texttt{password}, \texttt{token},
+             \texttt{totp}, \texttt{application\_credential}, \texttt{mapped}\dots \\
+user       & Identifiant, nom et domaine de l'utilisateur authentifié. \\
+project, domain, system & Portée du token : une seule de ces trois informations est présente
+             (section~\ref{sec:ks-portees}). \\
+roles      & Rôles de l'utilisateur sur cette portée, rôles impliqués compris. \\
+catalog    & Catalogue des services et de leurs endpoints (section~\ref{sec:ks-catalogue}). \\
+issued\_at, expires\_at & Dates de création et d'expiration (UTC). \\
+audit\_ids & Identifiants servant à tracer le token dans les journaux sans le révéler. \\
+\bottomrule
+\end{tabular}
+\caption{Informations associées à un token \parencite{api-identity}.}
+\label{tab:ks-token-champs}
+\end{table}
+
+\subsubsection{Obtenir un token}\label{sec:ks-obtenir}
+
+Le client envoie ses identifiants à \texttt{POST /v3/auth/tokens}. Keystone vérifie l'utilisateur,
+cherche ses rôles sur la portée demandée, rassemble le catalogue, puis demande au fournisseur de
+tokens d'en fabriquer un (figure~\ref{fig:ks-seq-auth}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  % acteurs et lignes de vie
+  \node[acteur, minimum width=3.0cm] (c) at (0,0)    {Client\\ \scriptsize\mdseries CLI, Horizon, SDK};
+  \node[acteur, minimum width=3.0cm, fill=insarouge, text=white, draw=black] (k) at (4.8,0)
+    {Keystone\\ \scriptsize\mdseries API v3};
+  \node[acteur, minimum width=3.0cm, fill=insapeche, draw=insaorange] (b) at (9.6,0)
+    {Backends\\ \scriptsize\mdseries identité, rôles, catalogue};
+  \node[acteur, minimum width=3.0cm, fill=insapeche, draw=insaorange] (f) at (14.4,0)
+    {Fournisseur\\ \scriptsize\mdseries de tokens (Fernet)};
+  \foreach \n in {c,k,b,f} \draw[vie] (\n.south) -- ++(0,-10.7);
+  % messages
+  \seqmsg{0}{4.8}{-1.4}{1}{\texttt{POST /v3/auth/tokens}\\ mot de passe, portée projet}
+  \seqmsg{4.8}{9.6}{-3.0}{2}{vérifier l'utilisateur\\ et son mot de passe}
+  \seqrep{9.6}{4.8}{-3.8}{}{utilisateur authentifié}
+  \seqmsg{4.8}{9.6}{-5.4}{3}{rôles sur le projet,\\ catalogue de services}
+  \seqrep{9.6}{4.8}{-6.2}{}{rôles et endpoints}
+  \seqmsg{4.8}{14.4}{-7.8}{4}{fabriquer le token :\\ utilisateur, méthodes, portée, expiration}
+  \seqrep{14.4}{4.8}{-8.6}{}{chaîne chiffrée : le token}
+  \seqrep{4.8}{0}{-10.4}{5}{\texttt{201 Created}, en-tête\\ \texttt{X-Subject-Token}\\ corps : rôles, catalogue}
+  \node[callout, text width=14.5cm] at (7.2,-11.9)
+    {Avec Fernet, le token n'est pas enregistré en base : il se valide en le déchiffrant.};
+\end{tikzpicture}}
+\caption{Obtention d'un token par mot de passe. Flèches pleines : requêtes ; flèches pointillées :
+réponses. Le client reçoit le token dans l'en-tête \texttt{X-Subject-Token} de la réponse.}
+\label{fig:ks-seq-auth}
+\end{figure}
+
+Le même échange en ligne de commande est \texttt{openstack token issue}. En voici la version brute,
+avec une requête et la réponse abrégée.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ curl -si -H "Content-Type: application/json" \
+    http://controller:5000/v3/auth/tokens -d '
+{ "auth": {
+    "identity": {
+      "methods": ["password"],
+      "password": { "user": { "name": "alice",
+                              "domain": { "name": "entreprise-A" },
+                              "password": "motdepasse" } } },
+    "scope": { "project": { "name": "prod",
+                            "domain": { "name": "entreprise-A" } } } } }'
+HTTP/1.1 201 CREATED
+X-Subject-Token: gAAAAABl...
+{ "token": {
+    "methods": ["password"],
+    "user":    { "id": "9a1b...", "name": "alice" },
+    "project": { "id": "4c2d...", "name": "prod" },
+    "roles":   [ { "name": "member" }, { "name": "reader" } ],
+    "catalog": [ { "type": "compute", "name": "nova", "endpoints": [
+                  { "interface": "public", "region": "RegionOne",
+                    "url": "http://controller:8774/v2.1" } ] }, ... ],
+    "issued_at":  "2026-10-04T08:00:00.000000Z",
+    "expires_at": "2026-10-04T09:00:00.000000Z",
+    "audit_ids": ["..."] } }
+\end{lstlisting}
+\end{minipage}\par
+
+Le token se trouve dans l'en-tête de la réponse, pas dans son corps. Le corps le décrit : le rôle
+\texttt{reader} y figure sans avoir été affecté, car il est impliqué par \texttt{member}
+(section~\ref{sec:ks-rbac}). Le client ne garde que la chaîne \texttt{X-Subject-Token}.
+
+\subsubsection{Présenter le token aux services}\label{sec:ks-utiliser}
+
+Le client envoie la chaîne dans l'en-tête \texttt{X-Auth-Token} de chaque requête. Le service
+destinataire ne la déchiffre pas lui-même : il la fait valider par Keystone. Prenons
+\texttt{openstack server create} (figure~\ref{fig:ks-requete}). Nova valide le token, vérifie ses
+propres règles d'accès, puis appelle Glance et Neutron au nom de l'utilisateur ; chacun valide à son
+tour le token. Pour une opération longue, Nova peut joindre à la requête un token de service
+(\texttt{X-Service-Token}, option \texttt{send\_service\_user\_token}) afin qu'elle aboutisse même si
+le token de l'utilisateur expire en route (section~\ref{sec:ks-middleware}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.6cm] (cli) at (0.6,3.4) {Client\\ \scriptsize\mdseries \texttt{openstack}};
+  \node[pfoc, minimum width=3.2cm, minimum height=1.0cm] (ks) at (7.0,6.6) {Keystone};
+  \node[psvc, minimum width=3.0cm, minimum height=1.2cm] (nova) at (7.0,3.4) {Nova\\ \scriptsize\mdseries API de calcul};
+  \node[psvc, minimum width=2.4cm] (gl) at (13.0,5.0) {Glance};
+  \node[psvc, minimum width=2.4cm] (ne) at (13.0,1.8) {Neutron};
+  \node[pgris, minimum width=4.2cm, font=\scriptsize\bfseries] (pol) at (7.0,1.0) {règles d'accès (\texttt{policy})};
+  % requête du client
+  \draw[fluxr] (cli.east) -- (nova.west)
+    node[num, pos=0.15, above=2pt] {1}
+    node[etiqf, midway, below=3pt] {\texttt{POST /v2.1/servers}\\ \texttt{X-Auth-Token}};
+  % validation par Nova
+  \draw[<->, thick, insaorange] (nova.north) -- (ks.south)
+    node[num, pos=0.5, left=4pt] {2}
+    node[etiqf, midway, right=3pt, text width=3.6cm, align=left]
+      {valide le token ; reçoit utilisateur, projet et rôles};
+  % appels aux autres services
+  \draw[fluxo] (nova.east) -- (gl.west) node[num, pos=0.5, above=3pt, xshift=-4pt] {3}
+    node[etiqf, midway, below=3pt] {obtenir l'image};
+  \draw[fluxo] (nova.east) -- (ne.west) node[num, pos=0.5, below=4pt, xshift=-4pt] {4}
+    node[etiqf, midway, above=3pt] {créer le port};
+  % validation par Glance et Neutron
+  \draw[fluxd, rounded corners=6pt] (ne.east) -- (15.5,1.8) -- (15.5,6.6) -- (ks.east);
+  \draw[fluxd, rounded corners=6pt] (gl.east) -- (15.5,5.0);
+  \node[num] at (15.5,4.0) {5};
+  \node[etiqf, anchor=south, text width=5.0cm] at (11.2,6.7)
+    {Glance et Neutron valident à leur tour le token auprès de Keystone};
+  % policy
+  \draw[insagris, thick] (nova.south) -- (pol.north);
+  \node[callout, text width=15.4cm] at (7.9,-0.4)
+    {Keystone dit qui est l'appelant et quels rôles il a ; chaque service décide lui-même de ce que ces rôles
+     permettent (\texttt{policy}).};
+\end{tikzpicture}}
+\caption{Anatomie d'une requête \texttt{openstack server create}. Flèche rouge : requête du client avec
+son token (1). Flèches orange : appels entre services ; Nova valide le token auprès de Keystone (2),
+puis appelle Glance (3) et Neutron (4). Flèches pointillées : Glance et Neutron valident à leur tour le
+token (5).}
+\label{fig:ks-requete}
+\end{figure}
+
+\subsubsection{Portées d'un token}\label{sec:ks-portees}
+
+Un token n'est utile à un service que s'il dit \emph{sur quoi} il donne des droits. On distingue
+quatre sortes de tokens (figure~\ref{fig:ks-portees}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.8cm, minimum height=1.0cm] (id) at (0,2.2) {Identifiants\\ \scriptsize\mdseries mot de passe\dots};
+  \node[pgris, minimum width=3.8cm, minimum height=1.5cm, text width=3.6cm] (un) at (5.6,2.2)
+    {Token non limité\\ \scriptsize\mdseries (\emph{unscoped}) : identité seule, ni rôles ni catalogue};
+  \node[psvc, minimum width=5.0cm, minimum height=1.0cm, text width=4.8cm] (pj) at (12.6,4.0)
+    {Token de projet\\ \scriptsize\mdseries ressources du projet : serveurs, volumes\dots};
+  \node[psvc, minimum width=5.0cm, minimum height=1.0cm, text width=4.8cm] (dm) at (12.6,2.2)
+    {Token de domaine\\ \scriptsize\mdseries utilisateurs, groupes et projets d'un domaine};
+  \node[psvc, minimum width=5.0cm, minimum height=1.0cm, text width=4.8cm] (sy) at (12.6,0.4)
+    {Token système\\ \scriptsize\mdseries opérations sur tout le déploiement};
+  \node[draw=insaorange, dashed, rounded corners=6pt, fit=(pj)(dm)(sy), inner sep=7pt] (grp) {};
+  \node[anchor=south west, font=\scriptsize\bfseries, text=insaorange] at (grp.north west) {Tokens limités à une portée (\emph{scoped})};
+  \draw[fluxr] (id) -- (un) node[num, pos=0.15, above=3pt] {1}
+    node[etiqf, midway, below=3pt] {sans portée};
+  \draw[fluxo] (un) -- (grp.west |- un) node[num, pos=0.2, above=3pt] {2}
+    node[etiqf, midway, below=3pt, text width=2.4cm] {méthode \texttt{token} + portée};
+  \draw[fluxd, rounded corners=6pt] (id.south) -- (0,-1.3) -- (12.6,-1.3) -- (grp.south)
+    node[etiqf, pos=0.35, above=1pt] {ou directement : identifiants + portée (cas courant)};
+  \node[callout, text width=15.4cm] at (7.4,-2.5)
+    {Les services n'acceptent que les tokens limités. Le token non limité sert à lister les projets accessibles
+     (\texttt{GET /v3/auth/projects}) avant d'en choisir un.};
+\end{tikzpicture}}
+\caption{Les quatre sortes de tokens. Un token non limité ne contient ni catalogue ni rôles ; il prouve
+seulement l'identité et sert à en obtenir un limité \parencite{keystone-tokens}. Les tokens limités
+contiennent un catalogue, des rôles et la portée.}
+\label{fig:ks-portees}
+\end{figure}
+
+C'est ce qui se passe dans Horizon après une connexion par un fournisseur d'identité externe :
+l'utilisateur obtient d'abord un token non limité, l'interface lui propose ses projets, puis échange
+ce token contre un token de projet (section~\ref{sec:ks-federation}). Avec les variables
+\texttt{OS\_PROJECT\_NAME} et \texttt{OS\_PROJECT\_DOMAIN\_NAME}, la ligne de commande demande
+directement un token de projet. Une portée de système se demande avec
+\texttt{OS\_SYSTEM\_SCOPE=all} ; une portée de domaine avec \texttt{OS\_DOMAIN\_NAME}.
+
+\subsubsection{Formats de token : Fernet et JWS}\label{sec:ks-formats}
+
+Le fournisseur de tokens se choisit dans \texttt{keystone.conf}, section \texttt{[token]}, option
+\texttt{provider}. Deux fournisseurs existent : \texttt{fernet}, par défaut depuis Kilo, et \texttt{jws},
+disponible depuis Stein \parencite{keystone-tokens}. Dans les deux cas le token n'est pas enregistré :
+c'est ce qui rend Keystone simple à répliquer.
+
+\begin{definition}{Token Fernet}
+Token produit selon la spécification Fernet : un message chiffré (AES-128 en mode CBC) et authentifié
+(HMAC-SHA256) par une clé symétrique, puis encodé en base64 \parencite{fernet-spec}. Seul Keystone,
+qui détient les clés, peut le lire.
+\end{definition}
+
+La figure~\ref{fig:ks-fernet-anatomie} montre les champs d'un token Fernet. Les informations utiles
+(utilisateur, méthodes, projet ou domaine, expiration, identifiants d'audit) sont sérialisées en
+MessagePack dans le texte chiffré, ce qui garde le token sous 250 octets \parencite{keystone-fernet}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \tikzset{champ/.style={draw=insarouge, thick, minimum height=1.3cm, align=center, font=\footnotesize\bfseries}}
+  \node[champ, fill=insarouge!8, minimum width=1.6cm] (v) at (0.8,0) {Version\\ {\scriptsize\mdseries 1 octet}};
+  \node[champ, fill=insarouge!8, minimum width=2.4cm, anchor=west] (t) at (v.east) {Horodatage\\ {\scriptsize\mdseries 8 octets}};
+  \node[champ, fill=insarouge!8, minimum width=2.6cm, anchor=west] (iv) at (t.east) {Vecteur d'init.\\ {\scriptsize\mdseries 16 octets}};
+  \node[champ, fill=insapeche, draw=insaorange, minimum width=5.6cm, anchor=west] (ct) at (iv.east) {Texte chiffré\\ {\scriptsize\mdseries longueur variable}};
+  \node[champ, fill=insarouge!8, minimum width=3.0cm, anchor=west] (hm) at (ct.east) {HMAC\\ {\scriptsize\mdseries 32 octets}};
+  \draw[decorate, decoration={brace, amplitude=6pt}, thick, insaorange] (ct.north east) -- (ct.north west)
+    node[midway, above=8pt, align=center, font=\footnotesize, text=black]
+    {charge utile (MessagePack) : identifiant de l'utilisateur, méthodes,\\ projet ou domaine, expiration, identifiants d'audit};
+  \draw[decorate, decoration={brace, amplitude=6pt, mirror}, thick, insarouge] (v.south west) -- (iv.south east)
+    node[midway, below=10pt, align=center, font=\footnotesize, text=black] {en clair, signés par le HMAC};
+  \draw[decorate, decoration={brace, amplitude=6pt, mirror}, thick, insagris] (hm.south west) -- (hm.south east)
+    node[midway, below=10pt, align=center, font=\footnotesize, text=black] {HMAC-SHA256 de tous\\ les champs précédents};
+  \node[callout, text width=14.4cm] at (7.6,-3.2)
+    {Le tout est encodé en base64 : la chaîne \texttt{gAAAAAB\dots} que le client présente.};
+\end{tikzpicture}}
+\caption{Anatomie d'un token Fernet. Le texte chiffré ne contient pas le catalogue ni les rôles :
+Keystone les relit dans ses bases quand il valide le token.}
+\label{fig:ks-fernet-anatomie}
+\end{figure}
+
+Pour valider un token, Keystone essaie les clés de son dépôt, déchiffre la charge utile, vérifie la
+date d'expiration, consulte les événements de révocation, puis reconstruit le corps du token
+(rôles, catalogue) à partir de ses bases. Une valeur d'identité modifiée entre la création du token
+et sa validation, comme un rôle retiré, est donc prise en compte immédiatement.
+
+\paragraph{Dépôt de clés et rotation.} Les clés Fernet sont des fichiers d'un dépôt
+(\texttt{/etc/keystone/fernet-keys/} par défaut), nommés par un entier. Trois états existent
+\parencite{keystone-fernet} :
+\begin{itemize}
+  \item la clé \emph{primaire}, d'indice le plus élevé : la seule qui chiffre, elle déchiffre aussi ;
+  \item les clés \emph{secondaires} : d'anciennes clés primaires, qui ne servent plus qu'à déchiffrer
+        les tokens encore valides ;
+  \item la clé \emph{en attente} (\emph{staged}), d'indice \texttt{0} : la prochaine clé primaire,
+        déjà présente sur tous les nœuds pour qu'un nœud qui n'a pas encore tourné puisse déjà lire
+        les tokens émis par un nœud qui a tourné.
+\end{itemize}
+
+La commande \texttt{keystone-manage fernet\_rotate} promeut la clé en attente en clé primaire, crée
+une nouvelle clé en attente et supprime les clés secondaires les plus anciennes quand le dépôt dépasse
+\texttt{max\_active\_keys} (figure~\ref{fig:ks-fernet-rotation}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \tikzset{cle/.style={minimum width=2.6cm, minimum height=0.7cm, font=\footnotesize\bfseries}}
+  % états successifs du dépôt (max_active_keys = 3)
+  \foreach \x/\titre in {0/{Après \texttt{fernet\_setup}}, 4.4/{Rotation 1}, 8.8/{Rotation 2}, 13.2/{Rotation 3}} {
+    \node[font=\footnotesize\bfseries, text=insagris] at (\x,3.1) {\titre};
+  }
+  % état 0
+  \node[pastille, pfoc, cle] at (0,2.2) {1 : primaire};
+  \node[pastille, pgris, cle] at (0,0.7) {0 : en attente};
+  % état 1
+  \node[pastille, pfoc, cle] at (4.4,2.2) {2 : primaire};
+  \node[pastille, psvc, cle] at (4.4,1.45) {1 : secondaire};
+  \node[pastille, pgris, cle] at (4.4,0.7) {0 : en attente};
+  % état 2
+  \node[pastille, pfoc, cle] at (8.8,2.2) {3 : primaire};
+  \node[pastille, psvc, cle] at (8.8,1.45) {2 : secondaire};
+  \node[pastille, pgris, cle] at (8.8,0.7) {0 : en attente};
+  \node[font=\scriptsize\itshape, text=insarouge] at (8.8,-0.05) {clé 1 supprimée};
+  % état 3
+  \node[pastille, pfoc, cle] at (13.2,2.2) {4 : primaire};
+  \node[pastille, psvc, cle] at (13.2,1.45) {3 : secondaire};
+  \node[pastille, pgris, cle] at (13.2,0.7) {0 : en attente};
+  \node[font=\scriptsize\itshape, text=insarouge] at (13.2,-0.05) {clé 2 supprimée};
+  % rotations
+  \foreach \a/\b in {1.5/2.9, 5.9/7.3, 10.3/11.7} {
+    \draw[fluxo] (\a,1.5) -- (\b,1.5);
+  }
+  \node[callout, text width=14.6cm] at (6.6,-1.3)
+    {Un token émis avec la clé 1 reste lisible jusqu'à la suppression de cette clé : la rotation doit donc être
+     plus lente que l'expiration des tokens.};
+\end{tikzpicture}}
+\caption{Rotation des clés Fernet avec \texttt{max\_active\_keys = 3}, valeur par défaut. À chaque rotation,
+la clé en attente devient primaire sous l'indice suivant, une nouvelle clé \texttt{0} est créée et, au-delà de
+trois clés, la plus ancienne clé secondaire est supprimée.}
+\label{fig:ks-fernet-rotation}
+\end{figure}
+
+\paragraph{Combien de clés conserver ?} Un token émis juste avant une rotation doit rester lisible
+jusqu'à son expiration, donc la clé qui l'a produit doit survivre à toutes les rotations qui ont lieu
+pendant ce temps. Si $T$ est la durée de vie des tokens et $R$ la période de rotation, il y a
+$\lceil T/R\rceil$ rotations pendant $T$ : il faut ajouter la clé primaire et la clé en attente.
+
+\begin{resultat}{Nombre minimal de clés}
+\[
+  \texttt{max\_active\_keys}\ \geq\ \Big\lceil \frac{T}{R}\Big\rceil + 2
+\]
+avec $T$ et $R$ dans la même unité. Pour des tokens de $24\ \mathrm{h}$ et une rotation toutes les
+$6\ \mathrm{h}$ : $24/6+2=6$ clés \parencite{keystone-fernet}. Avec les valeurs par défaut
+($T=1\ \mathrm{h}$, rotation quotidienne), $\lceil 1/24\rceil+2=3$, la valeur par défaut de
+\texttt{max\_active\_keys}.
+\end{resultat}
+
+\paragraph{Plusieurs nœuds Keystone.} Tous les nœuds doivent détenir le même dépôt, sinon un nœud ne sait
+pas lire les tokens produits par un autre. On fait la rotation sur un seul nœud, puis on copie son dépôt
+sur les autres, de préférence avec un outil de gestion de configuration : la rotation et la distribution
+doivent se suivre sans délai \parencite{keystone-fernet}. La mise en place et la rotation se font avec :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ keystone-manage fernet_setup \
+      --keystone-user keystone --keystone-group keystone
+$ keystone-manage fernet_rotate \
+      --keystone-user keystone --keystone-group keystone
+$ ls -l /etc/keystone/fernet-keys/
+-rw------- 1 keystone keystone 44 0
+-rw------- 1 keystone keystone 44 1
+-rw------- 1 keystone keystone 44 2
+\end{lstlisting}
+\end{minipage}\par
+
+\paragraph{Le format JWS.} Le fournisseur \texttt{jws} produit des tokens JSON Web Signature, signés avec
+une paire de clés asymétriques (algorithme ES256) \parencite{keystone-jws}. Le contenu d'un token JWS est
+signé mais pas chiffré : il est lisible par tout porteur. En contrepartie, la clé privée ne sert qu'à
+signer ; les autres nœuds n'ont besoin que des clés publiques.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# keystone.conf
+[token]
+provider = jws
+[jwt_tokens]
+jws_private_key_repository = /etc/keystone/jws-keys/private
+jws_public_key_repository  = /etc/keystone/jws-keys/public
+
+$ keystone-manage create_jws_keypair
+\end{lstlisting}
+\end{minipage}\par
+
+La rotation des clés JWS est manuelle \parencite{keystone-jws} : on génère une nouvelle paire, on
+distribue la nouvelle clé publique à tous les serveurs Keystone, on remplace \texttt{private.pem} sur le
+serveur qui signe, on attend l'expiration des tokens signés avec l'ancienne clé (au moins la valeur de
+\texttt{[token] expiration}), puis on retire l'ancienne clé publique.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{6.2cm}>{\raggedright\arraybackslash}p{6.2cm}@{}}
+\toprule
+ & \textbf{Fernet} & \textbf{JWS} \\
+\midrule
+Mécanisme & Chiffrement et HMAC avec des clés symétriques & Signature ES256 avec une paire de clés \\
+Contenu & Opaque : chiffré, lisible seulement par Keystone & Signé, mais lisible par tout porteur \\
+Stockage & Aucun & Aucun \\
+Clés à répartir & Tout le dépôt, secret, sur chaque nœud & Les clés publiques sur chaque nœud ; la clé privée là où l'on émet \\
+Rotation & \texttt{keystone-manage fernet\_rotate} & Manuelle, en cinq étapes \\
+Disponible depuis & Kilo (fournisseur par défaut) & Stein \\
+\bottomrule
+\end{tabular}
+\caption{Les deux fournisseurs de tokens de Keystone \parencite{keystone-tokens,keystone-jws}.}
+\label{tab:ks-fernet-jws}
+\end{table}
+
+\subsubsection{Expiration et révocation}\label{sec:ks-revocation}
+
+Un token vit une heure par défaut (\texttt{[token] expiration = 3600}, en secondes). Cette durée
+courte limite les dégâts d'un token volé : passé ce délai, le client doit s'authentifier de nouveau.
+
+Comme un token Fernet n'est pas enregistré, Keystone ne peut pas le supprimer. Il note donc des
+\emph{événements de révocation} dans sa base (\texttt{[revoke] driver = sql}) et les consulte à chaque
+validation. Un événement est créé par une révocation explicite (\texttt{openstack token revoke}) et,
+entre autres, quand on change le mot de passe d'un utilisateur, qu'on lui retire un rôle, qu'on le
+supprime ou qu'on désactive son projet.
+
+\begin{remarque}[Une révocation n'est pas immédiate partout]
+Un service qui a mis le résultat de la validation en cache continue d'accepter le token jusqu'à
+l'expiration de son cache, 300 secondes par défaut (section~\ref{sec:ks-middleware}). La durée de
+cache est un compromis entre la charge sur Keystone et la rapidité de la révocation.
+\end{remarque}
+
+% ---------------------------------------------------------------------
+\subsection{Catalogue de services et endpoints}\label{sec:ks-catalogue}
+% ---------------------------------------------------------------------
+
+Un client ne connaît que l'adresse de Keystone. Pour joindre Nova, Glance ou Neutron, il lit leurs
+adresses dans le \gls{catalogue}, que Keystone lui renvoie avec le token. Cette indirection permet à un
+opérateur de déplacer un service sans toucher aux clients.
+
+\begin{definition}{Catalogue de services}
+Liste, fournie par Keystone, des services d'un déploiement et des \glspl{endpoint} (adresses) de
+chacun. Le catalogue est inclus dans tout token limité à une portée ; \texttt{GET /v3/auth/catalog}
+le renvoie à part. Un paramètre \texttt{nocatalog} dans la requête d'authentification l'omet de la
+réponse \parencite{api-identity}.
+\end{definition}
+
+\subsubsection{Services, endpoints, régions}
+
+Trois objets forment le catalogue. Un \emph{service} a un type normalisé (\texttt{compute},
+\texttt{network}, \texttt{image}\dots) et un nom. Il a un \emph{endpoint} par interface (\texttt{public},
+\texttt{internal}, \texttt{admin}) et par \emph{région}. Le tableau~\ref{tab:ks-types} donne les types et
+les ports usuels des guides d'installation.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\ttfamily}p{3.5cm}p{3.0cm}>{\ttfamily}p{2.4cm}>{\raggedright\arraybackslash}p{6.4cm}@{}}
+\toprule
+\textbf{Type de service} & \textbf{Service} & \textbf{Port usuel} & \textbf{Rôle} \\
+\midrule
+identity       & Keystone  & 5000 & Identité, tokens, catalogue \\
+compute        & Nova      & 8774 & Calcul \\
+placement      & Placement & 8778 & Inventaire des ressources \\
+image          & Glance    & 9292 & Images \\
+network        & Neutron   & 9696 & Réseau \\
+volumev3       & Cinder    & 8776 & Volumes (alias de \texttt{block-storage}) \\
+object-store   & Swift     & 8080 & Objets \\
+orchestration  & Heat      & 8004 & Piles de ressources \\
+load-balancer  & Octavia   & 9876 & Répartiteurs de charge \\
+baremetal      & Ironic    & 6385 & Serveurs physiques \\
+container-infra & Magnum   & 9511 & Clusters Kubernetes \\
+database       & Trove     & 8779 & Bases de données \\
+\bottomrule
+\end{tabular}
+\caption{Types de service du catalogue et ports usuels ; ce sont les valeurs des guides d'installation,
+l'opérateur peut en choisir d'autres.}
+\label{tab:ks-types}
+\end{table}
+
+Les trois interfaces correspondent à trois publics (figure~\ref{fig:ks-interfaces}). Un service peut
+publier la même URL pour les trois, comme le fait Keystone v3, dont l'API est unique, ou trois URL
+distinctes derrière trois réseaux.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=4.4cm, minimum height=1.1cm] (ks) at (8.3,6.2) {Keystone\\ \scriptsize\mdseries catalogue de services};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (4.8,1.1) rectangle (11.8,4.7);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (4.95,4.6) {Service \texttt{compute} (nova), région RegionOne};
+  \node[pdat, minimum width=6.4cm, font=\scriptsize] (e1) at (8.3,3.7)
+    {\textbf{public} \ \texttt{https://cloud.example.org:8774/v2.1}};
+  \node[pdat, minimum width=6.4cm, font=\scriptsize] (e2) at (8.3,2.8)
+    {\textbf{internal} \ \texttt{http://controller:8774/v2.1}};
+  \node[pdat, minimum width=6.4cm, font=\scriptsize] (e3) at (8.3,1.9)
+    {\textbf{admin} \ \texttt{http://controller:8774/v2.1}};
+  \node[pcli, minimum width=3.6cm] (u1) at (1.8,3.7) {Utilisateur, application};
+  \node[pcli, minimum width=3.6cm] (u2) at (1.8,2.8) {Service OpenStack};
+  \node[pcli, minimum width=3.6cm] (u3) at (1.8,1.9) {Opérateur};
+  \node[psvc, minimum width=2.4cm, minimum height=1.4cm] (nova) at (14.6,2.8) {Nova\\ \scriptsize\mdseries API};
+  \draw[fluxr] (u1.east) -- (4.8,3.7);
+  \draw[fluxr] (u2.east) -- (4.8,2.8);
+  \draw[fluxr] (u3.east) -- (4.8,1.9);
+  \node[etiqf, above=3pt] at (4.1,3.7) {externe};
+  \node[etiqf, above=3pt] at (4.1,2.8) {gestion};
+  \node[etiqf, above=3pt] at (4.1,1.9) {admin.};
+  \foreach \e in {e1,e2,e3} \draw[fluxo] (\e.east) -- (nova.west);
+  \draw[fluxo] (ks.south) -- (8.3,4.7) node[etiqf, midway, right=3pt] {enregistre le service et ses endpoints};
+  \node[callout, text width=15.4cm] at (8.0,0.1)
+    {Le client choisit l'interface (\texttt{--os-interface}, \texttt{OS\_INTERFACE}) : il ne connaît aucune URL à l'avance.};
+\end{tikzpicture}}
+\caption{Les trois interfaces d'un service : l'endpoint \texttt{public} sert les utilisateurs depuis le réseau
+externe, \texttt{internal} sert les appels entre services sur le réseau de gestion, \texttt{admin} sert
+les opérations d'administration. Le catalogue associe à chacun une URL.}
+\label{fig:ks-interfaces}
+\end{figure}
+
+Une région est une division générale d'un déploiement, qui peut avoir des sous-régions
+\parencite{keystone-concepts}. Un seul Keystone peut servir plusieurs régions : le catalogue d'un token
+contient alors les endpoints de toutes les régions, et le client choisit la sienne
+(figure~\ref{fig:ks-regions}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.6cm] (cli) at (1.3,6.6) {Client};
+  \node[pfoc, minimum width=4.6cm, minimum height=1.1cm] (ks) at (8.0,6.6)
+    {Keystone\\ \scriptsize\mdseries identités et catalogue partagés};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,0.9) rectangle (7.7,4.4);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,4.3) {RegionOne};
+  \foreach \x/\n in {1.5/Nova, 3.95/Cinder, 6.4/Glance} \node[psvc, minimum width=2.1cm] at (\x,3.3) {\n};
+  \foreach \x/\n in {1.5/Neutron, 3.95/Swift} \node[psvc, minimum width=2.1cm] at (\x,2.2) {\n};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (8.3,0.9) rectangle (15.8,4.4);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (8.45,4.3) {RegionTwo};
+  \foreach \x/\n in {9.6/Nova, 12.05/Cinder, 14.5/Glance} \node[psvc, minimum width=2.1cm] at (\x,3.3) {\n};
+  \node[psvc, minimum width=2.1cm] at (9.6,2.2) {Neutron};
+  \draw[fluxr] (cli.east) -- (ks.west) node[etiqf, midway, above=2pt] {token + catalogue};
+  \draw[fluxo] (ks.south west) -- (3.95,4.4) node[etiqf, midway, left=2pt] {endpoints\\ RegionOne};
+  \draw[fluxo] (ks.south east) -- (12.05,4.4) node[etiqf, midway, right=2pt] {endpoints\\ RegionTwo};
+  \node[callout, text width=15.4cm] at (8.0,-0.2)
+    {Le catalogue liste les endpoints de chaque région ; le client choisit la sienne
+     (\texttt{OS\_REGION\_NAME=RegionTwo}).};
+\end{tikzpicture}}
+\caption{Un Keystone, deux régions. Chaque région a ses propres services, déclarés dans le catalogue
+avec leur identifiant de région.}
+\label{fig:ks-regions}
+\end{figure}
+
+\subsubsection{Déclarer un service et ses endpoints}
+
+Une installation déclare chaque service avec son compte de service (section~\ref{sec:ks-deploiement}),
+puis ses endpoints. Les commandes d'inspection montrent ce que voit le client.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack service create --name nova --description "OpenStack Compute" compute
+$ openstack endpoint create --region RegionOne \
+      compute public http://controller:8774/v2.1
+$ openstack endpoint create --region RegionOne \
+      compute internal http://controller:8774/v2.1
+$ openstack endpoint create --region RegionOne \
+      compute admin http://controller:8774/v2.1
+$ openstack catalog list
+$ openstack catalog show compute
+$ openstack endpoint list --service compute --interface internal
+$ openstack endpoint set --disable ENDPOINT_ID
+$ openstack region create --parent-region RegionOne RegionTwo
+$ openstack --os-interface internal --os-region-name RegionTwo server list
+\end{lstlisting}
+\end{minipage}\par
+
+Par défaut, le catalogue est stocké dans la base SQL (\texttt{[catalog] driver = sql}) et se gère par
+ces commandes. Le pilote \texttt{templated} lit un fichier statique : il suffit pour un test, mais il ne se
+modifie pas par l'API \parencite{keystone-services}.
+
+% ---------------------------------------------------------------------
+\subsection{Architecture interne de Keystone}\label{sec:ks-archi}
+% ---------------------------------------------------------------------
+
+Keystone est une application WSGI, servie par un serveur HTTP (Apache avec \texttt{mod\_wsgi}, port
+5000), qui regroupe plusieurs services internes. Chacun délègue son stockage à un \emph{pilote}
+(\emph{driver}) choisi dans \texttt{keystone.conf} \parencite{keystone-architecture}. La
+figure~\ref{fig:ks-archi} montre l'empilement des couches : l'API, les services internes, les pilotes
+et les stockages.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=15.4cm] (cl) at (7.7,10.2) {Utilisateurs \ $\cdot$ \ Horizon \ $\cdot$ \ \texttt{keystonemiddleware} des services};
+  \node[pgris, minimum width=15.4cm] (ap) at (7.7,9.0) {Serveur HTTP : Apache et \texttt{mod\_wsgi}, port 5000};
+  \draw[insarouge, thick, rounded corners=6pt, fill=insarouge!4] (0,3.9) rectangle (15.4,8.3);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insarouge] at (0.15,8.2) {Application Keystone (WSGI)};
+  \node[psvc, minimum width=13.2cm] (api) at (6.85,7.35)
+    {API REST v3 (Flask-RESTful) : \texttt{/v3/auth}, \texttt{/v3/users}, \texttt{/v3/projects}, \texttt{/v3/roles}\dots};
+  \foreach \x/\n/\d in {1.5/Token/{Fernet, JWS}, 4.15/Identity/{SQL, LDAP}, 6.8/Resource/{SQL},
+                        9.45/Assignment/{SQL}, 12.1/Catalog/{SQL, templated}} {
+    \node[pfoc, minimum width=2.5cm] (m\n) at (\x,6.0) {\n};
+    \node[psvc, minimum width=2.5cm, font=\scriptsize\bfseries] (d\n) at (\x,4.6) {\d};
+    \draw[flux] (m\n.south) -- (d\n.north);
+    \draw[flux] (api.south -| m\n.north) -- (m\n.north);
+  }
+  \node[pgris, minimum width=1.8cm, minimum height=3.4cm, text width=1.6cm, font=\scriptsize\bfseries] (os) at (14.4,5.75)
+    {Biblio\-thèques Oslo\\[3pt] \mdseries policy\\ cache\\ db\\ messaging};
+  % stockages
+  \node[pdat, minimum width=2.6cm, font=\scriptsize\bfseries] (st1) at (1.5,2.4) {Dépôt de clés\\ (fichiers)};
+  \node[pdat, minimum width=2.6cm, font=\scriptsize\bfseries] (st2) at (4.15,2.4) {Annuaire\\ LDAP / AD};
+  \node[pdat, minimum width=7.6cm, font=\scriptsize\bfseries] (st3) at (10.2,2.4) {Base SQL (MariaDB) : \texttt{user}, \texttt{project}, \texttt{role}, \texttt{endpoint}\dots};
+  \draw[flux] (dToken.south) -- (st1.north);
+  \draw[flux] (dIdentity.south) -- (st2.north);
+  \draw[flux] (dIdentity.south east) -- (6.8,2.75);
+  \foreach \n in {Resource, Assignment, Catalog} \draw[flux] (d\n.south) -- (d\n.south |- st3.north);
+  \draw[flux] (cl.south) -- (ap.north);
+  \draw[flux] (ap.south -| 7.7,0) -- (7.7,8.3);
+  \node[callout, text width=15.2cm] at (7.7,0.9)
+    {Chaque service interne a son pilote : on change de stockage (par exemple SQL vers LDAP pour l'identité)
+     sans changer l'API.};
+\end{tikzpicture}}
+\caption{Couches de Keystone. L'API REST v3 appelle les services internes (en rouge) ; chacun utilise un
+pilote (en pêche) qui accède au stockage. Keystone compte aussi les services credential, trust, revoke,
+federation et limits, non dessinés. Les bibliothèques Oslo fournissent les règles d'accès (\texttt{oslo.policy}), le cache
+(\texttt{oslo.cache}), l'accès à la base (\texttt{oslo.db}) et les notifications (\texttt{oslo.messaging}).}
+\label{fig:ks-archi}
+\end{figure}
+
+Le tableau~\ref{tab:ks-internes} résume le rôle des cinq services principaux et les pilotes
+disponibles.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{8.0cm}>{\raggedright\arraybackslash}p{5.2cm}@{}}
+\toprule
+\textbf{Service} & \textbf{Rôle} & \textbf{Pilotes} \\
+\midrule
+Identity   & Valide les identifiants des utilisateurs et des groupes. & SQL (par défaut), LDAP en lecture seule \\
+Resource   & Fournit les données sur les projets et les domaines. & SQL \\
+Assignment & Fournit les données sur les rôles et les affectations de rôle. & SQL \\
+Token      & Crée et valide les tokens. & Fernet (par défaut), JWS \\
+Catalog    & Registre des endpoints des services. & SQL (par défaut), fichier \texttt{templated} \\
+\bottomrule
+\end{tabular}
+\caption{Les services internes de Keystone \parencite{keystone-architecture}.}
+\label{tab:ks-internes}
+\end{table}
+
+\subsubsection{L'API d'identité v3}
+
+Keystone n'expose plus que la version 3 de son API, sous le préfixe \texttt{/v3}. Une requête de
+découverte sur \texttt{GET /} liste les versions disponibles. Le tableau~\ref{tab:ks-api} regroupe les
+principales ressources \parencite{api-identity}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{7.4cm}>{\raggedright\arraybackslash}p{8.1cm}@{}}
+\toprule
+\textbf{Ressource} & \textbf{Rôle} \\
+\midrule
+/v3/auth/tokens & \texttt{POST} : obtenir un token ; \texttt{GET} : valider un token ; \texttt{HEAD} : tester sa validité ;
+  \texttt{DELETE} : le révoquer. \\
+/v3/auth/catalog, /v3/auth/projects & Catalogue du token ; projets, domaines et systèmes accessibles à l'utilisateur. \\
+/v3/users, /v3/groups & Utilisateurs et groupes. \\
+/v3/projects, /v3/domains & Projets et domaines. \\
+/v3/roles, /v3/role\_assignments & Rôles ; liste des affectations de rôle. \\
+/v3/services, /v3/endpoints, /v3/regions & Catalogue de services. \\
+/v3/credentials & Identifiants stockés (clés EC2, secrets TOTP). \\
+/v3/OS-TRUST/trusts & Délégations (\emph{trusts}). \\
+/v3/users/\{id\}/\allowbreak application\_credentials & Application credentials d'un utilisateur. \\
+/v3/OS-FEDERATION/\dots & Fournisseurs d'identité, protocoles, règles de correspondance (\emph{mappings}). \\
+/v3/registered\_limits, /v3/limits & Limites unifiées. \\
+\bottomrule
+\end{tabular}
+\caption{Principales ressources de l'API d'identité v3.}
+\label{tab:ks-api}
+\end{table}
+
+\subsubsection{Configuration}
+
+La configuration est dans \texttt{/etc/keystone/keystone.conf}, au format INI, une section par
+composant. L'extrait suivant correspond à une installation classique ; chaque service interne y apparaît
+avec son pilote.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+[DEFAULT]
+notification_format = cadf
+[database]
+connection = mysql+pymysql://keystone:KEYSTONE_DBPASS@controller/keystone
+[cache]
+enabled = true
+backend = dogpile.cache.memcached
+backend_argument = url:controller:11211
+[identity]
+driver = sql
+[catalog]
+driver = sql
+[token]
+provider = fernet
+expiration = 3600
+[fernet_tokens]
+key_repository = /etc/keystone/fernet-keys/
+max_active_keys = 3
+\end{lstlisting}
+\end{minipage}\par
+
+La section \texttt{[auth]} liste les méthodes d'authentification acceptées, \texttt{methods}.
+Par défaut elle contient notamment \texttt{password}, \texttt{token}, \texttt{application\_credential}
+et \texttt{mapped} ; \texttt{totp} doit être ajouté pour l'authentification multifacteur
+\parencite{keystone-options}. Le cache est désactivé tant qu'aucun \texttt{backend} n'est
+configuré : la valeur par défaut du pilote est \texttt{dogpile.cache.null}.
+
+\subsubsection{Haute disponibilité}
+
+Comme un token Fernet n'est pas enregistré, Keystone ne garde aucun état en local, à l'exception des
+dépôts de clés. On le déploie donc en plusieurs exemplaires identiques derrière un répartiteur de charge,
+sur une base partagée (figure~\ref{fig:ks-ha}). Keystone étant consulté à chaque requête de chaque
+service, c'est un point de passage obligé : son indisponibilité bloque d'abord les nouvelles
+authentifications, puis la validation des tokens dont le cache a expiré.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=7.0cm] (cl) at (7.8,7.9) {Clients et services OpenStack};
+  \node[pgris, minimum width=7.0cm] (lb) at (7.8,6.6) {Répartiteur de charge (HAProxy), TLS};
+  \foreach \x/\n in {2.4/1, 7.8/2, 13.2/3} {
+    \node[pfoc, minimum width=4.4cm, minimum height=1.3cm] (k\n) at (\x,4.5) {Contrôleur \n\\ \scriptsize\mdseries Apache + Keystone};
+    \draw[fluxo] (lb.south) -- (k\n.north);
+  }
+  \node[bus, minimum width=15.4cm, font=\footnotesize\bfseries] (b) at (7.8,2.8) {Ressources communes à tous les nœuds};
+  \foreach \n in {1,2,3} \draw[flux] (k\n.south) -- (k\n.south |- b.north);
+  \node[pdat, minimum width=5.2cm] (db) at (2.9,1.3) {Galera (MariaDB), 3 nœuds};
+  \node[pgris, minimum width=3.6cm] (mc) at (8.2,1.3) {memcached};
+  \node[pgris, minimum width=4.4cm, dashed] (fk) at (13.0,1.3) {clés Fernet identiques\\ \scriptsize\mdseries copiées sur chaque nœud};
+  \foreach \n in {db,mc,fk} \draw[flux] (\n.north) -- (\n.north |- b.south);
+  \draw[flux] (cl.south) -- (lb.north);
+  \node[callout, text width=15.2cm] at (7.8,-0.1)
+    {Sans état local, n'importe quel nœud traite n'importe quelle requête : on ajoute ou on retire des
+     nœuds sans interruption.};
+\end{tikzpicture}}
+\caption{Keystone en haute disponibilité : trois nœuds identiques derrière un répartiteur de charge, une
+base SQL en grappe et un cache partagé. Les clés Fernet doivent être les mêmes sur chaque nœud.}
+\label{fig:ks-ha}
+\end{figure}
+
+\subsubsection{Où sont stockées les données ?}
+
+Les données persistantes sont dans la base \texttt{keystone}. Les tables suivantes sont les plus
+utiles à connaître ; \texttt{SHOW TABLES;} liste les autres.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{6.2cm}>{\raggedright\arraybackslash}p{9.3cm}@{}}
+\toprule
+\textbf{Tables} & \textbf{Contenu} \\
+\midrule
+user, local\_user, password & Utilisateurs, leurs identifiants locaux et les empreintes de mots de passe. \\
+project & Projets et domaines (un domaine est un projet de plus haut niveau). \\
+role, assignment, implied\_role & Rôles, affectations et rôles impliqués. \\
+service, endpoint, region & Catalogue de services. \\
+revocation\_event & Événements de révocation de tokens. \\
+trust, application\_credential, credential & Délégations, application credentials et secrets stockés. \\
+identity\_provider, federation\_protocol, mapping & Fédération d'identité. \\
+registered\_limit, limit & Limites unifiées. \\
+\bottomrule
+\end{tabular}
+\caption{Quelques tables de la base Keystone.}
+\label{tab:ks-tables}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Sources d'identité : SQL, LDAP, fédération}\label{sec:ks-backends}
+% ---------------------------------------------------------------------
+
+Les utilisateurs et les groupes d'un domaine peuvent venir de trois sources. Le choix détermine qui
+détient les comptes, qui vérifie les mots de passe et ce qu'on peut modifier depuis OpenStack
+(tableau~\ref{tab:ks-sources}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.4cm}>{\raggedright\arraybackslash}p{3.1cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{2.7cm}>{\raggedright\arraybackslash}p{3.3cm}@{}}
+\toprule
+\textbf{Source} & \textbf{Détient les comptes} & \textbf{Vérifie le mot de passe} & \textbf{Modifiable depuis OpenStack} & \textbf{Usage typique} \\
+\midrule
+SQL (défaut) & Keystone & Keystone, mot de passe stocké sous forme d'empreinte & Oui & Comptes de service, petits déploiements, tests \\
+LDAP, Active Directory & L'annuaire & L'annuaire & Non : lecture seule & Entreprise qui a déjà un annuaire \\
+Fédération & Le fournisseur d'identité & Le fournisseur d'identité & Non & Authentification unique, partenaires, plusieurs clouds \\
+\bottomrule
+\end{tabular}
+\caption{Les sources d'identité de Keystone (la fédération est détaillée en section~\ref{sec:ks-federation}).}
+\label{tab:ks-sources}
+\end{table}
+
+\subsubsection{Un backend par domaine}
+
+Par défaut, un seul pilote d'identité sert tous les domaines. Avec l'option
+\texttt{domain\_\allowbreak specific\_\allowbreak drivers\_\allowbreak enabled}, chaque domaine peut avoir son pilote, décrit dans le
+fichier \texttt{keystone.\allowbreak NOM\_\allowbreak DU\_\allowbreak DOMAINE.conf} ; un domaine sans fichier utilise la configuration
+principale \parencite{keystone-config}. C'est ainsi qu'un même cloud héberge des entreprises qui ont chacune
+leur annuaire (figure~\ref{fig:ks-domaines-backends}). Seule l'identité (utilisateurs et groupes) vient
+de l'annuaire ; les projets, les rôles et les affectations restent dans la base SQL de Keystone.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=4.6cm, minimum height=1.1cm] (ks) at (7.7,7.2)
+    {Keystone\\ \scriptsize\mdseries \texttt{domain\_specific\_drivers\_enabled}};
+  \node[psvc, minimum width=4.2cm, minimum height=1.1cm] (d0) at (2.6,5.0) {Domaine \texttt{Default}\\ \scriptsize\mdseries \texttt{keystone.conf}};
+  \node[psvc, minimum width=4.2cm, minimum height=1.1cm] (d1) at (7.7,5.0) {Domaine \texttt{entreprise-A}\\ \scriptsize\mdseries \texttt{keystone.entreprise-A.conf}};
+  \node[psvc, minimum width=4.2cm, minimum height=1.1cm] (d2) at (12.8,5.0) {Domaine \texttt{entreprise-B}\\ \scriptsize\mdseries \texttt{keystone.entreprise-B.conf}};
+  \node[pgris, minimum width=4.2cm, minimum height=1.0cm] (l1) at (7.7,2.9) {Annuaire LDAP\\ \scriptsize\mdseries de l'entreprise A};
+  \node[pgris, minimum width=4.2cm, minimum height=1.0cm] (l2) at (12.8,2.9) {Active Directory\\ \scriptsize\mdseries de l'entreprise B};
+  \node[pdat, minimum width=12.0cm, minimum height=1.0cm] (sql) at (7.1,0.9)
+    {Base SQL de Keystone : projets, rôles et affectations de tous les domaines ;\\ comptes du domaine \texttt{Default}};
+  \draw[fluxo] (ks.south west) -- (d0.north);
+  \draw[fluxo] (ks.south) -- (d1.north);
+  \draw[fluxo] (ks.south east) -- (d2.north);
+  \draw[fluxr] (d0.south) -- (d0.south |- sql.north) node[etiqf, midway, right=2pt] {identité (SQL)};
+  \draw[fluxr] (d1.south) -- (l1.north) node[etiqf, midway, right=2pt] {identité (LDAP)};
+  \draw[fluxr] (d2.south) -- (l2.north) node[etiqf, midway, right=2pt] {identité (LDAP)};
+  \draw[fluxd, rounded corners=6pt] (ks.east) -- (16.3,7.2) -- (16.3,0.9) -- (sql.east);
+  \node[etiqf] at (15.2,1.9) {affectations\\ toujours en SQL};
+  \node[callout, text width=15.2cm] at (7.9,-0.5)
+    {Chaque domaine a ses propres comptes : l'utilisateur \texttt{alice} de A et celui de B sont deux
+     utilisateurs différents.};
+\end{tikzpicture}}
+\caption{Backends d'identité par domaine. Les comptes du domaine \texttt{Default} (dont les comptes de
+service) sont dans la base SQL ; les domaines \texttt{entreprise-A} et \texttt{entreprise-B} lisent chacun
+un annuaire distinct.}
+\label{fig:ks-domaines-backends}
+\end{figure}
+
+La mise en place demande deux fichiers et un redémarrage d'Apache :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/keystone/keystone.conf
+[identity]
+domain_specific_drivers_enabled = True
+domain_config_dir = /etc/keystone/domains
+
+# /etc/keystone/domains/keystone.entreprise-A.conf
+[identity]
+driver = ldap
+
+[ldap]
+url = ldap://ldap.entreprise-a.example.org
+user = cn=Manager,dc=entreprise-a,dc=example,dc=org
+password = MOTDEPASSE
+suffix = dc=entreprise-a,dc=example,dc=org
+user_tree_dn = ou=Users,dc=entreprise-a,dc=example,dc=org
+user_objectclass = inetOrgPerson
+group_tree_dn = ou=Groups,dc=entreprise-a,dc=example,dc=org
+group_objectclass = groupOfNames
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack domain create entreprise-A
+$ sudo systemctl restart apache2
+$ openstack user list --domain entreprise-A
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{remarque}[LDAP en lecture seule]
+Keystone ne gère qu'un accès en lecture seule à un annuaire \parencite{keystone-config} : il ne crée
+pas, ne modifie pas et ne supprime pas de compte LDAP. Les comptes se gèrent dans l'annuaire ; Keystone
+n'y fait que lire les utilisateurs et les groupes, et leur affecter des rôles dans sa propre base. Pour
+modifier la configuration d'un domaine sans redémarrer, l'option
+\texttt{domain\_configurations\_from\_database = True} la stocke en base et la rend modifiable par l'API.
+\end{remarque}
+
+\paragraph{Bonne pratique.} On garde en général les comptes de service (\texttt{nova}, \texttt{neutron},
+\texttt{glance}\dots) dans le domaine \texttt{Default}, donc en SQL : une panne de l'annuaire d'une
+entreprise ne coupe alors pas les services OpenStack entre eux.
+
+% ---------------------------------------------------------------------
+\subsection{Fédération d'identité}\label{sec:ks-federation}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Fédération d'identité}
+Partage d'identités entre plusieurs systèmes de gestion d'identité : l'utilisateur s'authentifie auprès d'un
+\gls{idp} externe, et non plus avec un compte propre au cloud \parencite{keystone-federation}. Dans ce
+schéma, Keystone joue le rôle de \gls{sp} : il fournit des tokens à des utilisateurs authentifiés ailleurs.
+\end{definition}
+
+La fédération évite de dupliquer les comptes et leurs mots de passe, permet l'authentification unique
+(\gls{sso}) et laisse une organisation partenaire gérer ses propres utilisateurs. Deux protocoles sont
+pris en charge : \gls{saml2}, au format XML et courant dans les entreprises et les universités, et
+\gls{oidc}, au format JSON, construit sur OAuth 2.0 \parencite{keystone-federation}.
+
+\subsubsection{Les objets de la fédération}
+
+Keystone ne sait pas ce qu'un IdP appelle « un administrateur » : il faut traduire les attributs de
+l'assertion en objets Keystone. Quatre objets le font (figure~\ref{fig:ks-fed-objets}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pgris, minimum width=3.4cm, minimum height=1.2cm] (ext) at (1.4,4.0) {Fournisseur d'identité\\ \scriptsize\mdseries externe (SAML2, OIDC)};
+  \node[psvc, minimum width=3.4cm, minimum height=1.2cm] (idp) at (6.4,4.0) {Identity provider\\ \scriptsize\mdseries \texttt{idp1}, \texttt{remote-id}};
+  \node[psvc, minimum width=3.4cm, minimum height=1.2cm] (pro) at (10.7,4.0) {Protocole\\ \scriptsize\mdseries \texttt{saml2} ou \texttt{openid}};
+  \node[pdat, minimum width=3.4cm, minimum height=1.2cm] (map) at (15.0,4.0) {Mapping\\ \scriptsize\mdseries règles JSON};
+  \node[pdat, minimum width=3.4cm, minimum height=1.2cm] (grp) at (15.0,1.6) {Groupe local\\ \scriptsize\mdseries et utilisateur};
+  \node[pfoc, minimum width=3.4cm, minimum height=1.2cm] (aff) at (10.7,1.6) {Affectation de rôle\\ \scriptsize\mdseries groupe, rôle, projet};
+  \node[pcli, minimum width=3.4cm, minimum height=1.2cm] (tok) at (6.4,1.6) {Token Keystone\\ \scriptsize\mdseries limité à un projet};
+  \draw[fluxr] (ext) -- (idp) node[num, pos=0.15, above=3pt] {1}
+    node[etiqf, midway, below=3pt, text width=1.4cm] {assertion};
+  \draw[fluxo] (idp) -- (pro) node[num, pos=0.15, above=3pt] {2};
+  \draw[fluxo] (pro) -- (map) node[num, pos=0.15, above=3pt] {3};
+  \draw[fluxo] (map) -- (grp) node[num, pos=0.5, left=4pt] {4}
+    node[etiqf, midway, right=3pt] {attributs $\to$ groupes};
+  \draw[fluxo] (grp) -- (aff) node[num, pos=0.15, above=3pt] {5};
+  \draw[fluxr] (aff) -- (tok) node[num, pos=0.15, above=3pt] {6};
+  \node[callout, text width=15.4cm] at (8.2,-0.2)
+    {Un IdP est enregistré par son \texttt{remote-id} ; le protocole l'associe à un mapping ; le mapping
+     désigne les groupes locaux, qui portent les rôles.};
+\end{tikzpicture}}
+\caption{Du fournisseur d'identité au token Keystone. Le mapping traduit les attributs de l'assertion en
+utilisateur et en groupes ; les affectations de rôle des groupes déterminent les droits du token.}
+\label{fig:ks-fed-objets}
+\end{figure}
+
+Le mapping est l'objet central. Il se compose de règles, chacune avec une partie \texttt{remote} (les
+conditions sur les attributs de l'assertion) et une partie \texttt{local} (ce qui en résulte)
+\parencite{keystone-mapping}. Dans \texttt{local}, \texttt{\{0\}}, \texttt{\{1\}}\dots{} désignent les
+valeurs des attributs \texttt{remote} listés dans l'ordre. Les conditions disponibles sont notamment
+\texttt{any\_one\_of}, \texttt{not\_any\_of}, \texttt{whitelist}, \texttt{blacklist} et \texttt{regex}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+[
+  { "local": [
+      { "user":  { "name": "{0}" },
+        "group": { "name": "federated_users",
+                   "domain": { "name": "Default" } } } ],
+    "remote": [ { "type": "REMOTE_USER" } ] },
+  { "local": [
+      { "user":  { "name": "{0}" },
+        "group": { "name": "admins-cloud",
+                   "domain": { "name": "Default" } } } ],
+    "remote": [ { "type": "REMOTE_USER" },
+                { "type": "orgPersonType", "any_one_of": ["ops"] } ] }
+]
+\end{lstlisting}
+\end{minipage}\par
+
+Ce mapping place tout utilisateur authentifié dans le groupe \texttt{federated\_users} et ajoute le
+groupe \texttt{admins-cloud} à ceux dont l'attribut \texttt{orgPersonType} vaut \texttt{ops}. Un mapping
+peut aussi créer des projets avec des rôles pour l'utilisateur (clé \texttt{projects}, avec
+\texttt{name} et \texttt{roles}). À la première connexion, Keystone enregistre l'utilisateur fédéré dans
+sa base (un « utilisateur fantôme ») pour pouvoir lui affecter des rôles.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack identity provider create \
+      --remote-id https://idp.example.org/saml idp1
+$ openstack mapping create --rules rules.json mapping1
+$ openstack federation protocol create saml2 \
+      --identity-provider idp1 --mapping mapping1
+$ openstack group create federated_users
+$ openstack project create federated_project
+$ openstack role add --group federated_users \
+      --project federated_project member
+\end{lstlisting}
+\end{minipage}\par
+
+\subsubsection{Connexion par navigateur : Web SSO}
+
+Pour un utilisateur d'Horizon, le navigateur sert d'intermédiaire entre Horizon, Keystone et l'IdP
+(\emph{Web SSO}). La figure~\ref{fig:ks-websso} montre l'échange avec un IdP SAML2 ; l'IdP ne reçoit
+jamais de donnée de Keystone, il n'y a pas d'aller-retour \parencite{keystone-federation}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=3.0cm] (n) at (0,0)    {Navigateur\\ \scriptsize\mdseries utilisateur};
+  \node[acteur, minimum width=3.0cm] (h) at (4.6,0)  {Horizon};
+  \node[acteur, minimum width=3.0cm, fill=insarouge, text=white, draw=black] (k) at (9.2,0) {Keystone\\ \scriptsize\mdseries fournisseur de services};
+  \node[acteur, minimum width=3.0cm, fill=insagris!15, draw=insagris] (i) at (13.8,0) {IdP externe\\ \scriptsize\mdseries SAML2};
+  \foreach \a in {n,h,k,i} \draw[vie] (\a.south) -- ++(0,-11.6);
+  \seqmsg{0}{4.6}{-1.3}{1}{choisit « se connecter avec \texttt{idp1} »}
+  \seqrep{4.6}{0}{-2.2}{2}{redirection vers Keystone}
+  \seqmsg{0}{9.2}{-3.2}{3}{\texttt{GET /v3/auth/OS-FEDERATION/\dots/websso}}
+  \seqrep{9.2}{0}{-4.1}{4}{redirection vers l'IdP, avec une requête SAML}
+  \seqmsg{0}{13.8}{-5.1}{5}{page de connexion : l'utilisateur s'authentifie chez l'IdP}
+  \seqrep{13.8}{0}{-6.0}{6}{assertion signée, renvoyée vers Keystone}
+  \seqmsg{0}{9.2}{-7.0}{7}{\texttt{POST} de l'assertion}
+  \node[callout, font=\scriptsize, text width=3.8cm] at (12.0,-7.6) {règles du mapping $\to$ utilisateur, groupes, token non limité};
+  \seqrep{9.2}{0}{-8.5}{8}{page HTML qui renvoie le token à Horizon}
+  \seqmsg{0}{4.6}{-9.4}{9}{token non limité}
+  \seqmsg{4.6}{9.2}{-10.5}{10}{projets accessibles ;\\ échange du token}
+  \seqrep{9.2}{4.6}{-11.4}{11}{token de projet}
+  \node[callout, text width=15.0cm] at (7.2,-13.0)
+    {Aucun mot de passe ne passe par Horizon ni par Keystone : l'utilisateur ne le saisit que chez l'IdP.};
+\end{tikzpicture}}
+\caption{Connexion fédérée par navigateur (SAML2, profil Web SSO). Flèches pleines : requêtes ; pointillées :
+redirections et réponses. Les étapes 1 à 9 donnent à Horizon un token non limité ; l'étape 10 l'échange contre
+un token de projet (figure~\ref{fig:ks-portees}).}
+\label{fig:ks-websso}
+\end{figure}
+
+Le serveur Apache de Keystone porte le module du protocole : \texttt{mod\_shib} pour SAML2,
+\texttt{mod\_auth\_openidc} pour OIDC. Keystone ne reçoit que les attributs que ce module en extrait, ce
+qui explique le type \texttt{REMOTE\_USER} ou \texttt{orgPersonType} du mapping. La configuration comporte
+trois volets \parencite{keystone-federation-config}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# keystone.conf
+[auth]
+methods = password,token,saml2,openid
+
+[federation]
+remote_id_attribute = Shib-Identity-Provider
+trusted_dashboard = https://horizon.example.org/auth/websso/
+sso_callback_template = /etc/keystone/sso_callback_template.html
+
+# Horizon : local_settings.py
+WEBSSO_ENABLED = True
+WEBSSO_CHOICES = (("credentials", _("Keystone Credentials")),
+                  ("saml2", _("SAML2")))
+\end{lstlisting}
+\end{minipage}\par
+
+L'option \texttt{trusted\_dashboard} liste les adresses d'Horizon auxquelles Keystone accepte de renvoyer
+le token ; sans cela, n'importe quel site pourrait capter un token en se faisant passer pour un tableau de
+bord. Le point d'entrée du navigateur est
+\texttt{/v3/auth/\allowbreak OS-FEDERATION/\allowbreak identity\_\allowbreak providers/\allowbreak IDP/\allowbreak protocols/\allowbreak PROTOCOLE/\allowbreak websso}.
+
+\subsubsection{Connexion en ligne de commande}
+
+La ligne de commande n'a pas de navigateur : le client parle directement à l'IdP grâce à un plugin de la
+bibliothèque \texttt{keystoneauth}. Pour OIDC, le plugin \texttt{v3oidcpassword} échange un mot de passe
+contre un jeton auprès de l'IdP ; pour SAML2, \texttt{v3samlpassword} utilise le profil ECP
+(\emph{Enhanced Client or Proxy}), prévu pour un client qui comprend nativement SAML
+\parencite{keystone-federation}. L'URL \texttt{OS\_AUTH\_URL} reste celle de Keystone.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ export OS_AUTH_TYPE=v3oidcpassword
+$ export OS_AUTH_URL=https://sp.keystone.example.org/v3
+$ export OS_IDENTITY_PROVIDER=myidp OS_PROTOCOL=openid
+$ export OS_CLIENT_ID=keystone OS_CLIENT_SECRET=SECRET
+$ export OS_USERNAME=myuser OS_PASSWORD=mypassword
+$ export OS_DISCOVERY_ENDPOINT=\
+      https://idp.example.org/.well-known/openid-configuration
+$ openstack token issue
+\end{lstlisting}
+\end{minipage}\par
+
+\subsubsection{Keystone-to-Keystone}
+
+Un Keystone peut aussi servir de fournisseur d'identité à un autre Keystone : un utilisateur d'un
+cloud A obtient ainsi un accès au cloud B sans compte dans B. L'utilisateur s'authentifie d'abord auprès du
+Keystone fournisseur d'identité (A), puis lui demande par ECP une assertion SAML à destination du
+fournisseur de services (B), qu'il lui présente (figure~\ref{fig:ks-k2k}). L'IdP n'a jamais à recevoir de
+donnée du SP \parencite{keystone-federation}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  % les deux clouds, en fond
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (2.1,1.9) rectangle (7.5,-8.6);
+  \node[font=\scriptsize\bfseries, text=insaorange] at (4.8,1.6) {Cloud A : fournisseur d'identité};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (7.9,1.9) rectangle (16.2,-8.6);
+  \node[font=\scriptsize\bfseries, text=insaorange] at (12.0,1.6) {Cloud B : fournisseur de services};
+  \node[acteur, minimum width=3.0cm] (u) at (0,0) {Utilisateur\\ \scriptsize\mdseries du cloud A};
+  \node[acteur, minimum width=3.0cm, fill=insarouge, text=white, draw=black] (a) at (4.8,0) {Keystone A\\ \scriptsize\mdseries IdP};
+  \node[acteur, minimum width=3.0cm, fill=insarouge, text=white, draw=black] (b) at (9.6,0) {Keystone B\\ \scriptsize\mdseries SP};
+  \node[acteur, minimum width=3.0cm, fill=insapeche, draw=insaorange] (s) at (14.4,0) {Services\\ \scriptsize\mdseries du cloud B};
+  \foreach \n in {u,a,b,s} \draw[vie] (\n.south) -- ++(0,-8.3);
+  \seqmsg{0}{4.8}{-1.4}{1}{authentification :\\ token A}
+  \seqmsg{0}{4.8}{-3.0}{2}{demande d'assertion\\ pour le cloud B (ECP)}
+  \seqrep{4.8}{0}{-3.9}{3}{assertion SAML signée}
+  \seqmsg{0}{9.6}{-5.0}{4}{envoi de l'assertion}
+  \node[callout, font=\scriptsize, text width=2.9cm] at (11.6,-5.7) {mapping $\to$ utilisateur, groupes};
+  \seqrep{9.6}{0}{-6.8}{5}{token B}
+  \seqmsg{0}{14.4}{-7.9}{6}{requêtes API avec le token B}
+  \node[callout, text width=15.0cm] at (8.1,-9.9)
+    {Le cloud B ne reçoit aucun mot de passe : il fait confiance au Keystone A, déclaré comme
+     \texttt{identity provider}, et applique un mapping. Le cloud A déclare B comme \texttt{service provider}.};
+\end{tikzpicture}}
+\caption{Keystone-to-Keystone. L'utilisateur obtient d'un Keystone fournisseur d'identité une assertion SAML
+pour un second Keystone, qui la convertit en token local (étapes 1 à 5), puis utilise ce token auprès des
+services du cloud B (étape 6).}
+\label{fig:ks-k2k}
+\end{figure}
+
+La mise en place déclare B comme \texttt{service provider} dans A (\texttt{openstack service provider
+create}), et A comme \texttt{identity provider} dans B, avec un mapping et un protocole \texttt{saml2}
+comme pour toute fédération. Le Keystone A doit en outre pouvoir signer des assertions (section
+\texttt{[saml]} de \texttt{keystone.conf}, outil \texttt{xmlsec1}).
+
+% ---------------------------------------------------------------------
+\subsection{Mécanismes avancés}\label{sec:ks-avance}
+% ---------------------------------------------------------------------
+
+Un mot de passe et un token de durée courte suffisent pour un humain devant sa console, pas pour
+un script qui tourne sans surveillance, une pile Heat qui réagit à 3 h du matin ou un compte
+d'administrateur très exposé. Keystone offre pour cela quatre mécanismes : les \emph{application
+credentials}, les \emph{trusts}, l'authentification multifacteur et les limites unifiées. Le
+tableau~\ref{tab:ks-choix} dit lequel choisir.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{6.4cm}>{\raggedright\arraybackslash}p{3.7cm}>{\raggedright\arraybackslash}p{5.4cm}@{}}
+\toprule
+\textbf{Besoin} & \textbf{Mécanisme} & \textbf{Pourquoi} \\
+\midrule
+Un script ou un outil de supervision doit s'authentifier sans le mot de passe de l'utilisateur
+  & \Gls{appcred} & Secret révocable, limité à un sous-ensemble de rôles \\
+Un service doit agir plus tard au nom d'un utilisateur absent (Heat, Magnum)
+  & \Gls{trust} & Délégation explicite d'un utilisateur à un autre \\
+Une opération longue dépasse la durée de vie du token
+  & Token de service (\texttt{X-Service-Token}) & Le service est reconnu par un second token \\
+Protéger les comptes humains
+  & \Gls{mfa} & Un second facteur s'ajoute au mot de passe \\
+Plafonner les ressources d'un projet
+  & Limites unifiées & Valeurs stockées à un seul endroit \\
+Accueillir les utilisateurs d'une autre organisation
+  & Fédération (section~\ref{sec:ks-federation}) & Aucun compte à créer dans le cloud \\
+\bottomrule
+\end{tabular}
+\caption{Quel mécanisme choisir ?}
+\label{tab:ks-choix}
+\end{table}
+
+\subsubsection{Application credentials}
+
+\begin{definition}{Application credential}
+Identifiant et secret par lesquels un utilisateur délègue à une application un sous-ensemble de ses
+affectations de rôle sur un projet. L'application s'authentifie avec eux sans jamais connaître le mot de
+passe de l'utilisateur \parencite{keystone-appcred}.
+\end{definition}
+
+Un \gls{appcred} est créé pour le projet auquel l'utilisateur est limité au moment de la création. Il peut
+recevoir moins de rôles que l'utilisateur, jamais plus, et une date d'expiration. Le secret est conservé
+sous forme d'empreinte : il n'est affiché qu'à la création (figure~\ref{fig:ks-appcred}). Si l'utilisateur
+perd les rôles concernés, l'application credential cesse de fonctionner. Par défaut, elle ne peut pas créer
+ni supprimer d'autres application credentials (option \texttt{--unrestricted} pour l'autoriser, au prix d'un
+risque accru) \parencite{keystone-appcred}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=3.6cm, minimum height=1.1cm] (u) at (1.8,5.8) {Utilisateur \texttt{alice}\\ \scriptsize\mdseries \texttt{member}, \texttt{reader} sur \texttt{prod}};
+  \node[pfoc, minimum width=3.4cm, minimum height=1.7cm] (k) at (9.4,3.4) {Keystone};
+  \node[pcli, minimum width=3.6cm, minimum height=1.7cm] (a) at (1.8,3.4) {Application\\ \scriptsize\mdseries supervision};
+  \node[psvc, minimum width=3.4cm, minimum height=1.1cm] (s) at (14.8,3.4) {Services\\ \scriptsize\mdseries Nova, Cinder\dots};
+  % 1 : création
+  \draw[fluxr] (u.east) -| (k.north);
+  \node[num] at (4.4,5.8) {1};
+  \node[etiqf, above=3pt, text width=5.0cm] at (7.0,5.8) {crée l'application credential : rôle \texttt{member} seul, avec expiration};
+  % 2 et 3 : authentification de l'application
+  \draw[fluxr] ([yshift=3mm]a.east) -- ([yshift=3mm]k.west);
+  \node[num] at (4.4,3.7) {2};
+  \node[etiqf, above=2pt, text width=2.0cm] at (6.0,3.7) {identifiant et secret};
+  \draw[fluxd] ([yshift=-3mm]k.west) -- ([yshift=-3mm]a.east);
+  \node[num] at (4.4,3.1) {3};
+  \node[etiqf, below=2pt, text width=2.2cm] at (6.0,3.1) {token : projet \texttt{prod}, rôle \texttt{member}};
+  % 4 : appels aux services
+  \draw[fluxo, rounded corners=6pt] (a.south) -- (1.8,1.3) -- (14.8,1.3) -- (s.south);
+  \node[num] at (4.4,1.3) {4};
+  \node[etiqf, below=3pt] at (9.0,1.3) {requêtes avec le token};
+  \node[callout, text width=15.2cm] at (8.2,-0.4)
+    {L'utilisateur ne donne jamais son mot de passe ; il peut supprimer l'application credential seule, sans
+     changer son mot de passe.};
+\end{tikzpicture}}
+\caption{Application credential. L'utilisateur en crée un avec une partie de ses rôles (1) ; l'application
+s'authentifie avec l'identifiant et le secret (2), reçoit un token limité à ces rôles (3) et appelle les
+services (4).}
+\label{fig:ks-appcred}
+\end{figure}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack application credential create --role member \
+      --expiration 2026-12-31T23:59:59 supervision
+(le secret n'apparait qu'ici)
+$ openstack application credential list
+$ openstack application credential delete supervision
+\end{lstlisting}
+\end{minipage}\par
+
+L'application utilise alors le type d'authentification \texttt{v3applicationcredential}, par exemple dans
+un fichier \texttt{clouds.yaml} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+clouds:
+  supervision:
+    auth_type: v3applicationcredential
+    auth:
+      auth_url: https://keystone.example.org/v3
+      application_credential_id: 6cb5fa6a13184e6fab65ba2108adf50c
+      application_credential_secret: SECRET
+    region_name: RegionOne
+\end{lstlisting}
+\end{minipage}\par
+
+Des \emph{access rules} restreignent encore l'usage : l'application credential n'est alors valable que pour
+certaines méthodes et chemins d'API (par exemple \texttt{POST /v2.1/servers} sur le service
+\texttt{compute}), avec l'option \texttt{--access-rules} \parencite{keystone-appcred}.
+
+\subsubsection{Trusts}
+
+\begin{definition}{Trust}
+Extension d'identité qui permet la délégation, avec ou sans usurpation d'identité (\emph{impersonation}),
+entre deux utilisateurs : le \emph{trustor} délègue une partie de ses droits au \emph{trustee} pour une durée
+limitée \parencite{keystone-trusts}.
+\end{definition}
+
+Un \gls{trust} est défini par un projet et par des rôles, qui doivent être un sous-ensemble de ceux du
+trustor. On peut y ajouter une date de début et de fin et une profondeur de redélégation :
+\texttt{0} interdit toute délégation ultérieure, \texttt{1} l'autorise une fois, \texttt{inf} sans limite.
+Si le trustor perd un rôle, les trusts qui l'utilisent et les tokens associés sont révoqués
+automatiquement \parencite{keystone-trusts}. Heat s'en sert : quand Alice crée une pile, Heat reçoit un trust
+et agit ensuite au nom d'Alice, même quand elle est absente (figure~\ref{fig:ks-trust}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=3.0cm] (al) at (0,0) {Alice\\ \scriptsize\mdseries trustor};
+  \node[acteur, minimum width=3.0cm, fill=insapeche, draw=insaorange] (h) at (4.8,0) {Heat\\ \scriptsize\mdseries trustee};
+  \node[acteur, minimum width=3.0cm, fill=insarouge, text=white, draw=black] (k) at (9.6,0) {Keystone};
+  \node[acteur, minimum width=3.0cm, fill=insapeche, draw=insaorange] (n) at (14.4,0) {Nova};
+  \foreach \a in {al,h,k,n} \draw[vie] (\a.south) -- ++(0,-9.3);
+  \seqmsg{0}{4.8}{-1.3}{1}{crée une pile\\ (token d'Alice)}
+  \seqmsg{4.8}{9.6}{-2.9}{2}{crée un trust : Alice $\to$ Heat,\\ rôle \texttt{member}, projet \texttt{prod}}
+  \seqrep{9.6}{4.8}{-3.8}{3}{\texttt{trust\_id}, conservé par Heat}
+  \draw[insagris, dashed] (-1.6,-4.8) -- (16.0,-4.8);
+  \node[etiqf, font=\footnotesize\itshape] at (8.0,-4.8) {plus tard : Alice est absente (mise à l'échelle de nuit)};
+  \seqmsg{4.8}{9.6}{-6.2}{4}{s'authentifie avec son compte,\\ portée : le \texttt{trust\_id}}
+  \seqrep{9.6}{4.8}{-7.1}{5}{token au nom d'Alice}
+  \seqmsg{4.8}{14.4}{-8.3}{6}{crée un serveur avec ce token}
+  \node[callout, text width=15.0cm] at (7.2,-10.4)
+    {Heat n'a jamais le mot de passe d'Alice ; le trust se limite à un projet, à des rôles et à une durée.};
+\end{tikzpicture}}
+\caption{Trust utilisé par Heat. Alice délègue à Heat (étapes 1 à 3) ; plus tard, Heat s'authentifie avec son
+propre compte en désignant le trust et agit au nom d'Alice (étapes 4 à 6).}
+\label{fig:ks-trust}
+\end{figure}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack trust create --role member --project prod --impersonate alice heat
+$ openstack trust list
+$ openstack trust show TRUST_ID
+$ openstack trust delete TRUST_ID
+\end{lstlisting}
+\end{minipage}\par
+
+Le trustee s'authentifie avec ses propres identifiants et désigne le trust dans la portée de sa requête
+(\texttt{"scope": \{ "OS-TRUST:trust": \{ "id": "TRUST\_ID" \} \}}) ; avec la ligne de commande ou un fichier
+\texttt{clouds.yaml}, on renseigne \texttt{trust\_id} \parencite{keystone-trusts}.
+
+\subsubsection{Authentification multifacteur}
+
+L'\gls{mfa} exige plusieurs méthodes d'authentification successives. Keystone la pilote par deux
+options de l'utilisateur : \texttt{multi\_factor\_auth\_enabled} l'active, et
+\texttt{multi\_factor\_auth\_rules} liste les combinaisons de méthodes acceptées, sous la forme d'une liste de
+listes comme \texttt{[["password", "totp"]]}. La règle est satisfaite si l'utilisateur fournit au moins ces
+méthodes. La méthode \texttt{token} ne doit pas figurer dans une règle, car elle reprend toutes les méthodes
+déjà utilisées \parencite{keystone-mfa}. Le second facteur proposé est le \gls{totp}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# keystone.conf : ajouter totp aux méthodes d'authentification
+[auth]
+methods = external,password,token,application_credential,mapped,totp
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack credential create --type totp alice SECRET_BASE32
+$ openstack user set --enable-multi-factor-auth \
+      --multi-factor-auth-rule password,totp alice
+\end{lstlisting}
+\end{minipage}\par
+
+Le secret TOTP est une chaîne encodée en base32 d'au moins 128 bits, partagée avec l'application
+d'authentification de l'utilisateur. Un utilisateur dont les règles ne sont que partiellement satisfaites
+reçoit une réponse \texttt{401} et, dans l'en-tête \texttt{Openstack-Auth-Receipt}, un \emph{reçu}
+d'authentification (figure~\ref{fig:ks-mfa}). Il le renvoie avec le facteur manquant sans resaisir le mot de
+passe \parencite{api-identity}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=3.0cm] (c) at (0,0) {Client};
+  \node[acteur, minimum width=3.0cm, fill=insarouge, text=white, draw=black] (k) at (7.6,0) {Keystone};
+  \foreach \a in {c,k} \draw[vie] (\a.south) -- ++(0,-6.3);
+  \seqmsg{0}{7.6}{-1.3}{1}{\texttt{POST /v3/auth/tokens} : méthode \texttt{password}}
+  \seqrep{7.6}{0}{-2.9}{2}{\texttt{401} : reçu dans \texttt{Openstack-Auth-Receipt},\\ méthodes manquantes : \texttt{totp}}
+  \seqmsg{0}{7.6}{-4.2}{3}{méthode \texttt{totp} (code à 6 chiffres)\\ + en-tête \texttt{Openstack-Auth-Receipt}}
+  \seqrep{7.6}{0}{-5.6}{4}{\texttt{201 Created}, \texttt{X-Subject-Token}}
+  \node[callout, text width=10.4cm] at (3.8,-7.6)
+    {Le mot de passe n'est saisi qu'une fois ; le reçu a une durée de vie courte.};
+\end{tikzpicture}}
+\caption{Authentification en deux temps avec la règle \texttt{[["password", "totp"]]}. Le premier échange échoue
+avec un reçu ; le second apporte le facteur manquant.}
+\label{fig:ks-mfa}
+\end{figure}
+
+\subsubsection{Limites unifiées}
+
+Chaque service OpenStack gérait autrefois ses propres quotas. Keystone peut maintenant stocker les limites
+de tous les services à un seul endroit : les \emph{limites enregistrées} (\emph{registered limits}) associent
+un type de ressource à un service et fixent sa valeur par défaut pour tous les projets ; les \emph{limites de
+projet} la remplacent pour un projet donné, et supposent qu'une limite enregistrée existe déjà
+\parencite{keystone-limits}. Keystone ne fait que stocker ces valeurs : c'est chaque service qui les applique.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pdat, minimum width=8.0cm, minimum height=1.1cm] (r) at (7.6,4.6)
+    {Limite enregistrée : service \texttt{compute}, ressource \texttt{servers}\\ \scriptsize\mdseries valeur par défaut : 10};
+  \node[psvc, minimum width=3.8cm, minimum height=1.1cm] (p1) at (1.9,1.8) {Projet \texttt{prod}\\ \scriptsize\mdseries limite de projet : 25};
+  \node[pgris, minimum width=3.8cm, minimum height=1.1cm] (p2) at (7.6,1.8) {Projet \texttt{dev}\\ \scriptsize\mdseries aucune limite : 10};
+  \node[psvc, minimum width=3.8cm, minimum height=1.1cm] (p3) at (13.3,1.8) {Projet \texttt{test}\\ \scriptsize\mdseries limite de projet : 5};
+  \draw[fluxo] (r.south west) -- (p1.north) node[etiqf, midway, left=2pt] {remplacée};
+  \draw[fluxo] (r.south) -- (p2.north) node[etiqf, midway, right=2pt] {s'applique};
+  \draw[fluxo] (r.south east) -- (p3.north) node[etiqf, midway, right=2pt] {remplacée};
+  \node[callout, text width=14.4cm] at (7.6,0.1)
+    {Les services (Nova, par exemple) lisent ces limites dans Keystone et refusent la création
+     au-delà.};
+\end{tikzpicture}}
+\caption{Limites unifiées : une valeur par défaut par ressource, remplaçable projet par projet.}
+\label{fig:ks-limites}
+\end{figure}
+
+Deux \emph{modèles d'application} existent. Le modèle \texttt{flat} ignore la hiérarchie des projets : tous
+sont des pairs, et l'API accepte par exemple qu'un enfant ait une limite supérieure à celle de son parent. Le
+modèle \texttt{strict\_two\_level} impose au plus deux niveaux, la limite d'un enfant ne pouvant dépasser celle
+de son parent, et laisse les ressources circuler entre projets de la hiérarchie. Le modèle en vigueur se lit
+par \texttt{GET /v3/limits/model} \parencite{keystone-limits}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack registered limit create --service nova --default-limit 10 servers
+$ openstack limit create --project prod --service nova \
+      --resource-limit 25 servers
+$ openstack limit list
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{keystonemiddleware : la validation côté service}\label{sec:ks-middleware}
+% ---------------------------------------------------------------------
+
+Les services ne contiennent pas de code d'authentification : ils s'appuient sur un \gls{middleware}
+fourni avec Keystone, \texttt{keystonemiddleware}, module \texttt{auth\_token}. Placé dans le pipeline
+\gls{wsgi} de chaque API, il intercepte les requêtes HTTP avant l'application, vérifie le token et ajoute à la
+requête des en-têtes décrivant l'utilisateur, que les composants suivants utilisent \parencite{keystonemiddleware}.
+
+\subsubsection{Ce que fait le middleware}
+
+La figure~\ref{fig:ks-mw-pipeline} suit une requête dans le pipeline d'un service, ici Nova. Le middleware
+efface d'abord les en-têtes d'identité que le client aurait pu fabriquer, lit \texttt{X-Auth-Token},
+valide le token, puis renseigne les en-têtes.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=1.5cm] (cl) at (0.9,4.8) {Client};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (2.4,3.6) rectangle (16.3,6.4);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (2.55,6.3) {API de Nova (pipeline WSGI)};
+  \node[pfoc, minimum width=2.8cm, minimum height=1.2cm] (mw) at (5.0,4.8) {authtoken\\ \scriptsize\mdseries keystonemiddleware};
+  \node[psvc, minimum width=2.8cm, minimum height=1.2cm] (po) at (9.6,4.8) {Règles d'accès\\ \scriptsize\mdseries \texttt{oslo.policy}};
+  \node[psvc, minimum width=2.8cm, minimum height=1.2cm] (ap) at (14.2,4.8) {Code de l'API\\ \scriptsize\mdseries création du serveur};
+  \node[pfoc, minimum width=3.0cm] (ks) at (6.9,1.4) {Keystone};
+  \node[pgris, minimum width=3.0cm] (mc) at (2.4,1.4) {Cache\\ \scriptsize\mdseries memcached};
+  \draw[fluxr] (cl.east) -- (mw.west)
+    node[num, pos=0.5, above=3pt] {1}
+    node[etiqf, midway, below=3pt, text width=1.7cm] {\texttt{X-Auth-Token}};
+  \draw[<->, thick, insagris] (mw.south west) -- (mc.north) node[num, pos=0.5, left=4pt] {2};
+  \draw[<->, thick, insaorange] (mw.south east) -- (ks.north) node[num, pos=0.5, right=4pt] {3};
+  \node[etiqf, text width=3.0cm, align=left] at (3.9,2.6) {le token est-il en cache ?};
+  \node[etiqf, text width=3.4cm, align=left] at (9.4,2.9) {sinon : validation\\ \texttt{GET /v3/auth/tokens}};
+  \draw[fluxo] (mw.east) -- (po.west) node[num, pos=0.5, above=3pt] {4}
+    node[etiqf, midway, below=3pt, text width=1.5cm] {en-têtes \texttt{X-\dots}};
+  \draw[fluxo] (po.east) -- (ap.west) node[num, pos=0.5, above=3pt] {5}
+    node[etiqf, midway, below=3pt, text width=1.5cm] {rôle suffisant ?};
+  \node[callout, text width=15.4cm] at (8.2,-0.4)
+    {Le middleware authentifie ; c'est ensuite le service, par ses règles d'accès, qui autorise.};
+\end{tikzpicture}}
+\caption{Pipeline d'un service OpenStack. Le middleware reçoit le token du client (1), cherche son
+résultat de validation en cache (2), interroge Keystone si besoin (3), puis passe à l'application une requête
+enrichie d'en-têtes d'identité (4). La policy du service décide de l'accès (5).}
+\label{fig:ks-mw-pipeline}
+\end{figure}
+
+Les en-têtes ajoutés comprennent notamment \texttt{X-Identity-Status} (\texttt{Confirmed} si le token est
+valide), \texttt{X-User-Id}, \texttt{X-User-Name}, \texttt{X-Project-Id}, \texttt{X-Project-Name} et
+\texttt{X-Roles} \parencite{keystonemiddleware}. Quand la validation échoue, le middleware répond
+\texttt{401 Unauthorized} ; si Keystone est injoignable, il répond \texttt{503 Service Unavailable}
+(figure~\ref{fig:ks-mw-decision}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    dec/.style={diamond, aspect=2.6, draw=insaorange, fill=insapeche, thick, inner sep=1pt, align=center,
+                font=\footnotesize\bfseries, minimum width=3.6cm},
+    non/.style={font=\scriptsize\bfseries, text=insarouge, fill=white, inner sep=1pt},
+    oui/.style={font=\scriptsize\bfseries, text=insaorange, fill=white, inner sep=1pt}]
+  \node[pcli, minimum width=4.4cm] (s) at (3.6,9.4) {Requête avec \texttt{X-Auth-Token}};
+  \node[dec] (d1) at (3.6,7.6) {Token présent ?};
+  \node[dec] (d2) at (3.6,5.5) {Dans le cache ?};
+  \node[psvc, minimum width=4.4cm] (v) at (3.6,3.5) {Valider auprès de Keystone};
+  \node[dec] (d3) at (3.6,1.6) {Keystone répond ?};
+  \node[dec] (d4) at (3.6,-0.5) {Token valide ?};
+  \node[psvc, minimum width=4.4cm] (c) at (3.6,-2.4) {Mettre en cache (300 s)};
+  \node[pdat, minimum width=4.0cm] (e1) at (9.0,7.6) {\texttt{401 Unauthorized}};
+  \node[pdat, minimum width=4.0cm] (e3) at (9.0,1.6) {\texttt{503 Service Unavailable}};
+  \node[pdat, minimum width=4.0cm] (e4) at (9.0,-0.5) {\texttt{401 Unauthorized}};
+  \node[pfoc, minimum width=4.4cm, minimum height=1.3cm, text width=4.2cm] (ok) at (13.0,3.5)
+    {Identité acceptée : en-têtes \texttt{X-User-Id}, \texttt{X-Roles}\dots{} posés};
+  \draw[flux] (s) -- (d1);
+  \draw[flux] (d1) -- (d2) node[oui, midway] {oui};
+  \draw[flux] (d1) -- (e1) node[non, midway] {non};
+  \draw[flux] (d2) -- (v) node[non, midway] {non};
+  \draw[flux, rounded corners=6pt] (d2.east) -- (13.0,5.5) -- (ok.north) node[oui, pos=0.12] {oui};
+  \draw[flux] (v) -- (d3);
+  \draw[flux] (d3) -- (d4) node[oui, midway] {oui};
+  \draw[flux] (d3) -- (e3) node[non, midway] {non};
+  \draw[flux] (d4) -- (c) node[oui, midway] {oui};
+  \draw[flux] (d4) -- (e4) node[non, midway] {non};
+  \draw[flux, rounded corners=6pt] (c.east) -- (13.0,-2.4) -- (ok.south);
+  \node[callout, text width=15.4cm] at (8.2,-4.0)
+    {Pendant la durée du cache, une panne de Keystone passe inaperçue pour les tokens déjà validés.};
+\end{tikzpicture}}
+\caption{Décision du middleware pour chaque requête. Un token validé est mis en cache 300 secondes par
+défaut (\texttt{token\_cache\_time}) : les requêtes suivantes avec le même token ne coûtent pas d'appel à
+Keystone.}
+\label{fig:ks-mw-decision}
+\end{figure}
+
+\subsubsection{Configuration d'un service}
+
+Le middleware se déclare dans le pipeline du service (fichier \texttt{api-paste.ini}) et se configure dans
+la section \texttt{[keystone\_authtoken]} du fichier du service. Le compte utilisé est celui du service lui-même :
+dans les guides d'installation, un utilisateur par service (\texttt{nova}, \texttt{glance}\dots) dans le projet
+\texttt{service}, avec le rôle \texttt{admin}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# api-paste.ini (simplifié)
+[pipeline:main]
+pipeline = request_id authtoken keystonecontext app
+[filter:authtoken]
+paste.filter_factory = keystonemiddleware.auth_token:filter_factory
+
+# nova.conf
+[keystone_authtoken]
+www_authenticate_uri = http://controller:5000
+auth_url = http://controller:5000
+memcached_servers = controller:11211
+auth_type = password
+project_domain_name = Default
+user_domain_name = Default
+project_name = service
+username = nova
+password = NOVA_PASS
+\end{lstlisting}
+\end{minipage}\par
+
+Le résultat de validation est mis en cache : \texttt{token\_cache\_time} vaut 300 secondes par défaut
+(\texttt{-1} désactive le cache), dans les serveurs \texttt{memcached\_servers} s'ils sont définis, sinon dans la
+mémoire du processus. L'option \texttt{memcache\_security\_strategy} (\texttt{MAC} ou \texttt{ENCRYPT}) protège
+les données mises en cache \parencite{keystonemiddleware}.
+
+\subsubsection{Tokens de service}
+
+Une requête peut porter deux tokens : \texttt{X-Auth-Token} (l'utilisateur) et \texttt{X-Service-Token} (le
+service qui relaie la requête). Le middleware valide les deux ; le second doit porter un des rôles de
+\texttt{service\_token\_roles} (par défaut \texttt{service}) si \texttt{service\_token\_roles\_required} est
+vrai, valeur par défaut. Il pose alors \texttt{X-Service-Identity-Status: Confirmed}
+\parencite{keystonemiddleware}. Ce second token permet à un service d'être reconnu quand le token de
+l'utilisateur a expiré en cours d'opération longue : Keystone peut accepter un token utilisateur expiré
+dans une fenêtre configurable (\texttt{[token] allow\_expired\_window}) lorsqu'il est accompagné d'un token de
+service valide.
+
+\paragraph{Mode délégué.} Avec \texttt{delay\_auth\_decision = true}, le middleware ne rejette plus lui-même une
+requête non authentifiée : il pose \texttt{X-Identity-Status: Invalid} et laisse l'application décider. Swift
+s'en sert pour servir des objets à des clients anonymes quand une liste de contrôle d'accès le permet.
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre}\label{sec:ks-deploiement}
+% ---------------------------------------------------------------------
+
+Cette section installe Keystone sur un nœud contrôleur, crée les premiers objets, déclare un nouveau
+service et donne la démarche de diagnostic. Elle suit le guide d'installation d'OpenStack pour Ubuntu avec
+MariaDB et Apache \parencite{keystone-install}.
+
+\subsubsection{Installer Keystone}
+
+L'installation suit sept étapes (figure~\ref{fig:ks-install}). Le service est prêt quand
+\texttt{openstack token issue} renvoie un token.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \tikzset{etape/.style={psvc, minimum width=3.7cm, minimum height=1.25cm, text width=3.5cm}}
+  \node[etape] (e1) at (2.0,3.4) {Base de données\\ \scriptsize\mdseries \texttt{CREATE DATABASE keystone}};
+  \node[etape] (e2) at (6.2,3.4) {Installer le paquet\\ \scriptsize\mdseries \texttt{apt install keystone}};
+  \node[etape] (e3) at (10.4,3.4) {Configurer\\ \scriptsize\mdseries \texttt{keystone.conf}};
+  \node[etape] (e4) at (14.6,3.4) {Créer les tables\\ \scriptsize\mdseries \texttt{keystone-manage db\_sync}};
+  \node[etape] (e5) at (2.0,0.9) {Générer les clés\\ \scriptsize\mdseries \texttt{fernet\_setup}, \texttt{credential\_setup}};
+  \node[pfoc, minimum width=3.7cm, minimum height=1.25cm, text width=3.5cm] (e6) at (6.2,0.9) {Amorcer\\ \scriptsize\mdseries \texttt{keystone-manage bootstrap}};
+  \node[etape] (e7) at (10.4,0.9) {Démarrer, vérifier\\ \scriptsize\mdseries Apache, \texttt{openstack token issue}};
+  \foreach \i in {1,...,7} \node[num] at (e\i.north west) {\i};
+  \foreach \a/\b in {e1/e2, e2/e3, e3/e4, e5/e6, e6/e7} \draw[fluxo] (\a) -- (\b);
+  \draw[fluxo, rounded corners=6pt] (e4.south) -- (14.6,2.15) -- (2.0,2.15) -- (e5.north);
+  \node[callout, text width=15.4cm] at (8.2,-1.0)
+    {Les étapes 4 à 6 se font une seule fois ; seule la rotation des clés (\texttt{fernet\_rotate}) revient ensuite.};
+\end{tikzpicture}}
+\caption{Les sept étapes d'installation de Keystone.}
+\label{fig:ks-install}
+\end{figure}
+
+\paragraph{1 et 2. Base et paquet.} La base \texttt{keystone} et son utilisateur se créent dans MariaDB ; le
+paquet \texttt{keystone} installe l'application et sa configuration Apache.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+MariaDB> CREATE DATABASE keystone;
+MariaDB> GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost'
+    -> IDENTIFIED BY 'KEYSTONE_DBPASS';
+MariaDB> GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%'
+    -> IDENTIFIED BY 'KEYSTONE_DBPASS';
+# apt install keystone
+\end{lstlisting}
+\end{minipage}\par
+
+La syntaxe \texttt{GRANT \dots{} IDENTIFIED BY} convient à MariaDB et MySQL 5.7 ; MySQL 8 sépare
+\texttt{CREATE USER} et \texttt{GRANT} \parencite{keystone-install}.
+
+\paragraph{3 à 5. Configuration, tables, clés.} On renseigne la base et le fournisseur de tokens, puis on crée les tables et les dépôts de clés :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/keystone/keystone.conf
+[database]
+connection = mysql+pymysql://keystone:KEYSTONE_DBPASS@controller/keystone
+[token]
+provider = fernet
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# su -s /bin/sh -c "keystone-manage db_sync" keystone
+# keystone-manage fernet_setup \
+      --keystone-user keystone --keystone-group keystone
+# keystone-manage credential_setup \
+      --keystone-user keystone --keystone-group keystone
+\end{lstlisting}
+\end{minipage}\par
+
+\texttt{db\_sync} crée les tables, \texttt{fernet\_setup} le dépôt de clés des tokens et
+\texttt{credential\_setup} celui des clés qui chiffrent les secrets de \texttt{/v3/credentials}.
+
+\paragraph{6. Amorçage.} Sans utilisateur, on ne peut rien créer, d'où \texttt{bootstrap}. Il crée, dans le
+domaine \texttt{Default}, un utilisateur, un projet et un rôle nommés \texttt{admin}, les rôles \texttt{member} et
+\texttt{reader} (avec la hiérarchie \texttt{admin} $\Rightarrow$ \texttt{member} $\Rightarrow$ \texttt{reader}), les
+affectations du rôle \texttt{admin} à cet utilisateur sur le projet et sur le système, et, si on donne les
+URL, le service \texttt{identity} avec ses endpoints \parencite{keystone-bootstrap}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# keystone-manage bootstrap --bootstrap-password ADMIN_PASS \
+      --bootstrap-admin-url http://controller:5000/v3/ \
+      --bootstrap-internal-url http://controller:5000/v3/ \
+      --bootstrap-public-url http://controller:5000/v3/ \
+      --bootstrap-region-id RegionOne
+\end{lstlisting}
+\end{minipage}\par
+
+\paragraph{7. Démarrage et vérification.} On renseigne \texttt{ServerName controller} dans le fichier
+\texttt{apache2.conf}, on redémarre Apache (\texttt{service apache2 restart}), puis on exporte les
+variables d'environnement du client. Le fichier habituel s'appelle \texttt{admin-openrc}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ export OS_USERNAME=admin
+$ export OS_PASSWORD=ADMIN_PASS
+$ export OS_PROJECT_NAME=admin
+$ export OS_USER_DOMAIN_NAME=Default
+$ export OS_PROJECT_DOMAIN_NAME=Default
+$ export OS_AUTH_URL=http://controller:5000/v3
+$ export OS_IDENTITY_API_VERSION=3
+$ openstack token issue
+\end{lstlisting}
+\end{minipage}\par
+
+\subsubsection{Créer les premiers objets}
+
+Le projet \texttt{service} reçoit les comptes des services OpenStack ; un projet et un utilisateur ordinaires
+servent aux tests \parencite{keystone-install}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack domain create --description "An Example Domain" example
+$ openstack project create --domain default --description "Service Project" service
+$ openstack project create --domain default --description "Demo Project" myproject
+$ openstack user create --domain default --password-prompt myuser
+$ openstack role create myrole
+$ openstack role add --project myproject --user myuser myrole
+\end{lstlisting}
+\end{minipage}\par
+
+\subsubsection{Déclarer un nouveau service}
+
+Tout nouveau service (ici Glance) suit le même modèle : un compte de service avec un rôle dans le projet
+\texttt{service}, une entrée de service et ses endpoints. Ce compte est celui que le service met dans sa section
+\texttt{[keystone\_authtoken]} (section~\ref{sec:ks-middleware}).
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack user create --domain default --password-prompt glance
+$ openstack role add --project service --user glance admin
+$ openstack service create --name glance --description "OpenStack Image" image
+$ openstack endpoint create --region RegionOne image public http://controller:9292
+$ openstack endpoint create --region RegionOne image internal http://controller:9292
+$ openstack endpoint create --region RegionOne image admin http://controller:9292
+\end{lstlisting}
+\end{minipage}\par
+
+\subsubsection{Configurer le client}
+
+Plutôt que d'exporter dix variables, on écrit un fichier \texttt{clouds.yaml}
+(\texttt{\textasciitilde/.config/openstack/}) et l'on choisit le cloud avec \texttt{--os-cloud}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+clouds:
+  cours:
+    auth:
+      auth_url: http://controller:5000/v3
+      username: myuser
+      password: MOTDEPASSE
+      project_name: myproject
+      user_domain_name: Default
+      project_domain_name: Default
+    region_name: RegionOne
+    interface: public
+    identity_api_version: 3
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack --os-cloud cours token issue
+$ openstack --os-cloud cours --os-interface internal catalog list
+\end{lstlisting}
+\end{minipage}\par
+
+\subsubsection{Diagnostiquer un problème}
+
+La plupart des pannes d'authentification se reconnaissent au code HTTP et au message. On commence par
+reproduire la requête avec \texttt{openstack --debug token issue}, qui montre l'URL appelée, la requête
+envoyée et la réponse, puis on consulte les journaux d'Apache et de Keystone du nœud
+(par exemple \texttt{/var/log/apache2/keystone.log} sur Ubuntu). Le tableau~\ref{tab:ks-pannes} regroupe les cas
+courants.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.0cm}>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{5.9cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification}\\
+\midrule
+\texttt{401 Unauthorized} à l'authentification & Mot de passe faux, utilisateur désactivé, domaine
+  oublié ou token expiré & \texttt{openstack --debug token issue} ; contrôler \texttt{OS\_USER\_DOMAIN\_NAME} \\
+\texttt{403 Forbidden}, « not authorized to perform the requested action » & L'authentification a réussi, la
+  policy refuse : rôle absent sur cette portée & \texttt{openstack role assignment list --user U --names} \\
+\texttt{404 Not Found} sur l'authentification & URL erronée, par exemple sans \texttt{/v3}, ou
+  mauvais port & \texttt{curl http://controller:5000/} (liste des versions) \\
+« Could not find project » ou « Could not find user » & Nom cherché dans un autre domaine & Ajouter
+  \texttt{--project-domain} ou \texttt{--user-domain} \\
+« Expecting to find domain in project » (\texttt{400}) & Projet désigné par son nom sans son domaine &
+  Renseigner \texttt{OS\_PROJECT\_DOMAIN\_NAME} \\
+« public endpoint for compute service in RegionTwo region not found » & Pas d'endpoint pour cette
+  interface ou cette région dans le catalogue & \texttt{openstack catalog list} \\
+\texttt{503} renvoyé par Nova, Glance\dots{} & Le middleware du service ne joint pas Keystone &
+  \texttt{auth\_url} de \texttt{[keystone\_authtoken]}, réseau, Apache en marche \\
+\texttt{401} d'un service alors que le token est bon & Le compte du service (\texttt{username},
+  \texttt{password}) est refusé & Journal du service ; tester le compte avec \texttt{token issue} \\
+Tokens refusés sur un nœud seulement & Dépôts de clés Fernet différents entre nœuds &
+  Comparer \texttt{/etc/keystone/fernet-keys/} sur tous les nœuds \\
+Tokens « déjà expirés » & Horloges décalées entre nœuds & Synchroniser avec NTP (\texttt{chrony}) \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostic des erreurs courantes d'authentification.}
+\label{tab:ks-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Sécurité et limites}\label{sec:ks-securite}
+% ---------------------------------------------------------------------
+
+Un token est un secret au porteur : celui qui le possède agit avec les droits de l'utilisateur jusqu'à son
+expiration. Keystone concentre donc l'essentiel de la sécurité d'un cloud. Le tableau~\ref{tab:ks-secrets}
+liste les secrets en jeu et leur protection.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{4.7cm}>{\raggedright\arraybackslash}p{7.4cm}@{}}
+\toprule
+\textbf{Secret} & \textbf{Risque} & \textbf{Protection} \\
+\midrule
+Token & Usage par un tiers jusqu'à l'expiration & TLS sur tous les endpoints ; durée courte
+  (\texttt{expiration}) ; ne pas le journaliser \\
+Clés Fernet & Permettent de fabriquer des tokens valides & Lisibles du seul utilisateur \texttt{keystone} ;
+  rotation régulière ; copie contrôlée entre nœuds \\
+Mots de passe & Devinés ou réutilisés & Empreintes bcrypt par défaut (\texttt{password\_hash\_algorithm}) ;
+  politique de mots de passe ; MFA \\
+Mots de passe des comptes de service & Écrits en clair dans les fichiers de configuration &
+  Droits de lecture restreints ; secrets distincts par service \\
+Secrets d'application credentials & Vol du secret de l'application & Rôles minimaux, expiration,
+  \emph{access rules} ; suppression en cas de doute \\
+Règles de correspondance (fédération) & Un mapping trop large donne des rôles à tout le monde &
+  Conditions strictes (\texttt{any\_one\_of}) ; revue des groupes visés \\
+\bottomrule
+\end{tabular}
+\caption{Les secrets d'un déploiement Keystone et leur protection.}
+\label{tab:ks-secrets}
+\end{table}
+
+Une politique de mots de passe se configure dans la section \texttt{[security\_\allowbreak compliance]} de
+\texttt{keystone.conf} \parencite{keystone-options}. Aucune de ses options n'est active tant qu'on ne les
+renseigne pas.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+[security_compliance]
+lockout_failure_attempts = 5       # échecs avant verrouillage du compte
+lockout_duration = 1800            # durée du verrouillage (s)
+password_expires_days = 90         # durée de vie d'un mot de passe
+unique_last_password_count = 5     # interdit de réutiliser les 5 derniers
+minimum_password_age = 1           # délai minimal avant de le changer (jours)
+password_regex = ^(?=.*\d)(?=.*[a-zA-Z]).{8,}$
+\end{lstlisting}
+\end{minipage}\par
+
+Keystone publie des notifications d'audit au format \gls{cadf} (\texttt{notification\_format = cadf}, valeur
+par défaut) sur le bus de messages : on y retrouve les authentifications et les créations ou suppressions
+d'objets, ce qui permet de tracer qui a fait quoi.
+
+\subsubsection{Limites à connaître}
+
+\begin{itemize}
+  \item \textbf{Point de passage obligé.} Sans Keystone, plus d'authentification. On le déploie en plusieurs
+        exemplaires (figure~\ref{fig:ks-ha}) et on dimensionne ses processus Apache selon le nombre de
+        validations.
+  \item \textbf{Pas de renouvellement.} Un token ne se prolonge pas : après expiration, il faut s'authentifier
+        de nouveau ; c'est pourquoi les opérations longues utilisent des tokens de service.
+  \item \textbf{Horloges.} Les nœuds Keystone et les services doivent être synchronisés.
+  \item \textbf{Révocation différée.} Elle ne s'applique qu'à l'expiration du cache des services
+        (section~\ref{sec:ks-revocation}).
+  \item \textbf{LDAP en lecture seule.} Les comptes d'un annuaire se gèrent dans l'annuaire
+        (section~\ref{sec:ks-backends}).
+  \item \textbf{Les limites unifiées ne sont que stockées.} Chaque service doit les consulter pour les
+        appliquer (section~\ref{sec:ks-avance}).
+\end{itemize}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:ks-exercices}
+% ---------------------------------------------------------------------
+
+Sept exercices couvrent le chapitre : modélisation (exercice~\ref{ex:ks-modele}), lecture d'un token
+(\ref{ex:ks-lire}), clés Fernet (\ref{ex:ks-fernet}), cache et révocation (\ref{ex:ks-cache}), règles de
+correspondance (\ref{ex:ks-mapping}), choix d'un mécanisme de délégation (\ref{ex:ks-delegation}) et
+diagnostic (\ref{ex:ks-diag}).
+
+\begin{exercice}{Modéliser une organisation}\label{ex:ks-modele}
+La société Acme héberge deux équipes sur un cloud OpenStack. Les développeurs (groupe \texttt{devs})
+travaillent dans le projet \texttt{dev} ; la production est dans le projet \texttt{prod}, que gère
+l'équipe d'exploitation (groupe \texttt{ops}). Les développeurs doivent pouvoir utiliser \texttt{dev} et
+seulement consulter \texttt{prod}. Un client, Zeta, a son propre annuaire LDAP et un projet \texttt{zeta-app}.
+\begin{enumerate}[label=\arabic*.,nosep]
+  \item Proposer les domaines, projets et groupes, et dire où placer les comptes de service
+        (\texttt{nova}, \texttt{neutron}\dots).
+  \item Écrire les commandes qui créent les projets \texttt{dev} et \texttt{prod} et les affectations de
+        rôle correspondantes.
+  \item Alice appartient à \texttt{devs}. Quels rôles a-t-elle sur chaque projet ? Peut-elle créer un serveur
+        dans \texttt{prod} ?
+\end{enumerate}
+\end{exercice}
+\begin{correction}
+\paragraph{1. Domaines.} Un domaine par entité administrative : \texttt{acme} (utilisateurs, groupes
+\texttt{devs} et \texttt{ops}, projets \texttt{dev} et \texttt{prod}) et \texttt{zeta} (son annuaire LDAP,
+configuré par un fichier de domaine, et le projet \texttt{zeta-app}). Les comptes de service restent dans
+le domaine \texttt{Default}, en SQL, dans le projet \texttt{service} : une panne d'un annuaire ne les touche
+pas (section~\ref{sec:ks-backends}).
+
+\begin{center}
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0,0) rectangle (9.6,5.6);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.15,5.5) {Domaine \texttt{acme}};
+  \node[pdat, minimum width=2.4cm] (g1) at (1.8,4.0) {Groupe \texttt{devs}};
+  \node[pdat, minimum width=2.4cm] (g2) at (1.8,1.3) {Groupe \texttt{ops}};
+  \node[psvc, minimum width=2.4cm] (p1) at (7.6,4.0) {Projet \texttt{dev}};
+  \node[psvc, minimum width=2.4cm] (p2) at (7.6,1.3) {Projet \texttt{prod}};
+  \draw[fluxr] (g1) -- (p1) node[etiqf, midway, above=1pt] {\texttt{member}};
+  \draw[fluxr] (g1) -- (p2) node[etiqf, pos=0.35, right=2pt] {\texttt{reader}};
+  \draw[fluxr] (g2) -- (p2) node[etiqf, midway, above=1pt] {\texttt{admin}};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (10.4,2.9) rectangle (16.0,5.6);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (10.55,5.5) {Domaine \texttt{zeta}};
+  \node[pgris, minimum width=2.2cm] at (12.0,4.3) {LDAP de Zeta};
+  \node[psvc, minimum width=2.2cm] at (14.6,3.4) {\texttt{zeta-app}};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (10.4,0) rectangle (16.0,2.5);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (10.55,2.4) {Domaine \texttt{Default}};
+  \node[psvc, minimum width=3.6cm] at (13.2,1.0) {Projet \texttt{service}};
+\end{tikzpicture}}
+\end{center}
+
+\paragraph{2. Commandes.} On crée le domaine, les groupes et les projets, puis les affectations :
+\begin{lstlisting}[style=terminal]
+$ openstack domain create acme
+$ openstack group create --domain acme devs
+$ openstack group create --domain acme ops
+$ openstack project create --domain acme dev
+$ openstack project create --domain acme prod
+$ openstack role add --group devs --group-domain acme \
+      --project dev --project-domain acme member
+$ openstack role add --group devs --group-domain acme \
+      --project prod --project-domain acme reader
+$ openstack role add --group ops --group-domain acme \
+      --project prod --project-domain acme admin
+\end{lstlisting}
+Dans chaque commande, le groupe et le projet sont désignés avec leur domaine : un nom n'est unique qu'à
+l'intérieur d'un domaine (section~\ref{sec:ks-concepts}).
+
+\paragraph{3. Droits d'Alice.} Sur \texttt{dev}, elle a \texttt{member}, et donc \texttt{reader}, rôle impliqué ;
+sur \texttt{prod}, \texttt{reader} seulement ; sur aucun autre projet elle n'a de droit. Avec les règles par
+défaut fondées sur \texttt{reader}, \texttt{member} et \texttt{admin}, un \texttt{reader} ne peut pas créer de
+serveur : la requête est refusée (\texttt{403}) par la policy de Nova, pas par Keystone. Une vérification
+possible : \texttt{openstack role assignment list --user alice --user-domain acme --effective --names}.
+Certaines anciennes règles par défaut des services acceptent tout rôle sur le projet ; il faut vérifier la
+policy réellement en vigueur.
+\end{correction}
+
+\begin{exercice}{Lire un token}\label{ex:ks-lire}
+Keystone renvoie le corps suivant (abrégé).
+\begin{lstlisting}
+{ "token": {
+    "methods": ["password"],
+    "user":    { "name": "bob", "domain": { "name": "entreprise-A" } },
+    "project": { "name": "dev", "domain": { "name": "entreprise-A" } },
+    "roles":   [ { "name": "member" }, { "name": "reader" } ],
+    "catalog": [
+      { "type": "image", "name": "glance", "endpoints": [
+        { "interface": "public", "region": "RegionOne",
+          "url": "https://cloud.example.org:9292" },
+        { "interface": "internal", "region": "RegionOne",
+          "url": "http://controller:9292" } ] },
+      { "type": "compute", "name": "nova", "endpoints": [
+        { "interface": "public", "region": "RegionOne",
+          "url": "https://cloud.example.org:8774/v2.1" } ] } ],
+    "issued_at":  "2026-10-04T08:00:00.000000Z",
+    "expires_at": "2026-10-04T09:00:00.000000Z" } }
+\end{lstlisting}
+\begin{enumerate}[label=\arabic*.,nosep]
+  \item Quelle est la portée de ce token ? Quels rôles contient-il, et pourquoi y en a-t-il deux ?
+  \item Quelle est la durée de validité ? Est-elle celle par défaut ?
+  \item À quelle URL un client doit-il appeler Glance depuis Internet ? Depuis le réseau de gestion ?
+  \item Bob peut-il créer un utilisateur dans le domaine \texttt{entreprise-A} avec ce token ?
+\end{enumerate}
+\end{exercice}
+\begin{correction}
+\paragraph{1. Portée et rôles.} Le token est limité à un projet, \texttt{dev} du domaine \texttt{entreprise-A}
+(champ \texttt{project}). Il contient \texttt{member} et \texttt{reader} : un seul des deux a été affecté,
+\texttt{member}, qui implique \texttt{reader} dans la hiérarchie par défaut (section~\ref{sec:ks-rbac}).
+
+\paragraph{2. Validité.} De 08:00 à 09:00, soit une heure, ou $3600\ \mathrm{s}$ : c'est la valeur par défaut de
+\texttt{[token] expiration} (section~\ref{sec:ks-revocation}).
+
+\paragraph{3. URL de Glance.} Depuis Internet, l'endpoint \texttt{public}, \texttt{https://cloud.example.org:9292}.
+Depuis le réseau de gestion, l'endpoint \texttt{internal}, \texttt{http://controller:9292}
+(section~\ref{sec:ks-catalogue}).
+
+\paragraph{4. Création d'utilisateur.} Non. La création d'un utilisateur dans un domaine demande une
+affectation de rôle sur ce domaine (par exemple \texttt{manager} ou \texttt{admin}) et un token limité à ce
+domaine, que Bob n'a pas : son token est limité à un projet, avec \texttt{member}. L'appel serait refusé
+(\texttt{403}). Il lui faudrait d'abord obtenir ce rôle, puis un token de domaine
+(section~\ref{sec:ks-portees}).
+\end{correction}
+
+\begin{exercice}{Rotation des clés Fernet}\label{ex:ks-fernet}
+Les tokens expirent après $T=8\ \mathrm{h}$ et l'on fait tourner les clés toutes les $R=3\ \mathrm{h}$.
+\begin{enumerate}[label=\arabic*.,nosep]
+  \item Quelle valeur minimale donner à \texttt{max\_active\_keys} ? Que se passe-t-il avec la valeur par
+        défaut, 3 ?
+  \item Après \texttt{fernet\_setup} à $t=0$, le dépôt contient les clés $0$ et $1$. Avec
+        \texttt{max\_active\_keys = 5}, donner le contenu du dépôt après chacune des quatre rotations
+        ($t=3,\ 6,\ 9,\ 12\ \mathrm{h}$), en précisant la clé primaire, la clé en attente et les clés
+        secondaires.
+  \item À quel moment la clé $1$ est-elle supprimée ? Un token émis avec elle peut-il être encore valide ?
+\end{enumerate}
+\end{exercice}
+\begin{correction}
+\paragraph{1. Valeur minimale.} Avec $\texttt{max\_active\_keys}\ge\lceil T/R\rceil+2$ :
+$\lceil 8/3\rceil+2=3+2=5$ (section~\ref{sec:ks-formats}). Avec la valeur par défaut $3$, il ne reste que la
+clé en attente, la clé primaire et une clé secondaire : une clé primaire n'est conservée qu'un intervalle
+$R=3\ \mathrm{h}$ après sa démotion. Un token émis juste avant la rotation, valide $8\ \mathrm{h}$, devient
+illisible au bout de $3\ \mathrm{h}$ environ, dès la rotation suivante : Keystone le refuse alors qu'il
+n'a pas expiré.
+
+\paragraph{2. Évolution du dépôt.}
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}llll@{}}
+\toprule
+\textbf{Instant} & \textbf{Primaire} & \textbf{Secondaires} & \textbf{En attente} \\
+\midrule
+$t=0$ (\texttt{fernet\_setup}) & 1 & --- & 0 \\
+$t=3\ \mathrm{h}$ (rotation 1) & 2 & 1 & 0 \\
+$t=6\ \mathrm{h}$ (rotation 2) & 3 & 1, 2 & 0 \\
+$t=9\ \mathrm{h}$ (rotation 3) & 4 & 1, 2, 3 & 0 \\
+$t=12\ \mathrm{h}$ (rotation 4) & 5 & 2, 3, 4 & 0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+À chaque rotation, la clé en attente (indice $0$) devient primaire sous l'indice suivant et une nouvelle clé
+$0$ est créée. Après la rotation 4, le dépôt compterait six clés ($0$ à $5$) : la clé $1$, la plus ancienne
+secondaire, est supprimée pour respecter $\texttt{max\_active\_keys}=5$.
+
+\paragraph{3. Suppression de la clé 1.} Elle est supprimée à $t=12\ \mathrm{h}$. Elle a cessé d'être primaire à
+$t=3\ \mathrm{h}$, donc le dernier token qu'elle a chiffré a été émis juste avant $t=3\ \mathrm{h}$ et expire au
+plus tard à $3+8=11\ \mathrm{h}$, avant la suppression : aucun token valide n'est perdu.
+\end{correction}
+
+\begin{exercice}{Cache et révocation}\label{ex:ks-cache}
+Un utilisateur obtient un token (une requête à Keystone), puis lance dix fois
+\texttt{openstack server create} en deux minutes avec ce token. On suppose que chaque création envoie le
+token à Nova, qui le relaie à Glance et à Neutron ; chacun des trois services valide le token qu'il reçoit,
+avec le cache du middleware (\texttt{token\_cache\_time = 300}) propre à chaque service.
+\begin{enumerate}[label=\arabic*.,nosep]
+  \item Combien de requêtes Keystone reçoit-il sans cache ? Avec le cache ?
+  \item L'utilisateur est supprimé 60 secondes après la première création. Jusqu'à quand les services
+        acceptent-ils encore son token ?
+  \item Keystone tombe en panne 100 secondes après la première création. Que deviennent les créations
+        suivantes, puis, après 5 minutes, celles d'un autre utilisateur ?
+\end{enumerate}
+\end{exercice}
+\begin{correction}
+\paragraph{1. Nombre de requêtes.} Sans cache, chaque création coûte trois validations (Nova, Glance,
+Neutron) : $1+10\times3=31$ requêtes. Avec le cache, chaque service ne valide le token qu'une fois, à la
+première requête : $1+3=4$ requêtes, les neuf créations suivantes étant servies par les caches.
+
+\paragraph{2. Suppression de l'utilisateur.} Keystone enregistre un événement de révocation, mais chaque
+service continue d'accepter le token tant que son cache le contient. Les caches ont été remplis à la première
+création ($t\approx0$) et expirent à $t\approx300\ \mathrm{s}$ : le token reste accepté jusqu'à environ
+4 minutes après la suppression (section~\ref{sec:ks-revocation}). C'est le prix du cache : un compromis
+entre charge de Keystone et délai de révocation.
+
+\paragraph{3. Panne de Keystone.} Jusqu'à $t\approx300\ \mathrm{s}$, les créations du même utilisateur
+réussissent, car les validations sont servies par les caches (figure~\ref{fig:ks-mw-decision}). Après
+l'expiration du cache, un service doit rappeler Keystone, injoignable : il répond \texttt{503}. Un autre
+utilisateur ne peut ni s'authentifier ni voir son token validé (aucun cache pour lui) : ses requêtes
+échouent dès la panne.
+\end{correction}
+
+\begin{exercice}{Règles de correspondance}\label{ex:ks-mapping}
+Une université fournit un IdP SAML2. Ses assertions contiennent l'attribut \texttt{REMOTE\_USER} (l'identifiant de connexion) et \texttt{eduPersonAffiliation} (une ou plusieurs valeurs parmi \texttt{student},
+\texttt{staff} et \texttt{faculty}). On veut que tout utilisateur authentifié soit dans le groupe
+\texttt{univ-users}, et que le personnel (\texttt{staff} ou \texttt{faculty}) soit aussi dans
+\texttt{univ-staff}, les deux groupes étant dans le domaine \texttt{Default}.
+\begin{enumerate}[label=\arabic*.,nosep]
+  \item Écrire le mapping.
+  \item Qu'obtient un utilisateur dont l'affiliation est \texttt{student} ? Un utilisateur
+        \texttt{staff} ?
+  \item Donner les commandes qui enregistrent l'IdP (\texttt{remote-id} \texttt{https://idp.univ.example/saml}),
+        le mapping, le protocole, puis donnent le rôle \texttt{member} à \texttt{univ-users} sur le projet
+        \texttt{tp-openstack}.
+\end{enumerate}
+\end{exercice}
+\begin{correction}
+\paragraph{1. Mapping.} Deux règles : la première s'applique à tous, la seconde ajoute une condition sur
+l'affiliation (\texttt{any\_one\_of} est vrai si l'une des valeurs listées figure parmi celles de
+l'attribut).
+\begin{lstlisting}
+[
+  { "local": [
+      { "user":  { "name": "{0}" },
+        "group": { "name": "univ-users",
+                   "domain": { "name": "Default" } } } ],
+    "remote": [ { "type": "REMOTE_USER" } ] },
+  { "local": [
+      { "user":  { "name": "{0}" },
+        "group": { "name": "univ-staff",
+                   "domain": { "name": "Default" } } } ],
+    "remote": [ { "type": "REMOTE_USER" },
+                { "type": "eduPersonAffiliation",
+                  "any_one_of": ["staff", "faculty"] } ] }
+]
+\end{lstlisting}
+
+\paragraph{2. Résultat.} Un étudiant ne satisfait que la première règle : il est dans \texttt{univ-users}.
+Un membre du personnel satisfait les deux : il est dans \texttt{univ-users} et dans \texttt{univ-staff}. Dans
+les deux cas, le nom d'utilisateur est la valeur de \texttt{REMOTE\_USER}, repérée par \texttt{\{0\}}.
+
+\paragraph{3. Commandes.} Dans l'ordre : l'IdP, le mapping, le protocole, puis les droits.
+\begin{lstlisting}[style=terminal]
+$ openstack identity provider create \
+      --remote-id https://idp.univ.example/saml univ
+$ openstack mapping create --rules rules.json m-univ
+$ openstack federation protocol create saml2 \
+      --identity-provider univ --mapping m-univ
+$ openstack group create univ-users
+$ openstack group create univ-staff
+$ openstack role add --group univ-users --project tp-openstack member
+\end{lstlisting}
+Les groupes doivent exister avant la première connexion : un mapping désigne des groupes existants. Ce que
+Keystone ne fait pas, c'est donner des droits à \texttt{univ-staff} : tant qu'aucun rôle n'est affecté à ce
+groupe, appartenir à \texttt{univ-staff} ne change rien.
+\end{correction}
+
+\begin{exercice}{Choisir un mécanisme de délégation}\label{ex:ks-delegation}
+Pour chaque besoin, choisir le mécanisme Keystone adapté (mot de passe, application credential, trust, token
+de service, MFA, fédération) et donner l'élément de configuration ou la commande clé.
+\begin{enumerate}[label=(\alph*),nosep]
+  \item Un job de déploiement continu crée des serveurs dans le projet \texttt{prod} ; il ne doit pas connaître
+        le mot de passe de son propriétaire et ne doit pouvoir faire que cela.
+  \item Heat doit ajouter des serveurs à 3 h du matin, au nom d'Alice, absente.
+  \item Nova relaie une opération qui dure plus que la vie du token de l'utilisateur.
+  \item Les administrateurs du cloud doivent saisir un code à usage unique en plus de leur mot de passe.
+  \item Les employés d'un partenaire doivent accéder au cloud avec leur propre annuaire, sans qu'on crée
+        leurs comptes.
+\end{enumerate}
+\end{exercice}
+\begin{correction}
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.8cm}>{\raggedright\arraybackslash}p{3.8cm}>{\raggedright\arraybackslash}p{10.2cm}@{}}
+\toprule
+ & \textbf{Mécanisme} & \textbf{Élément clé} \\
+\midrule
+(a) & Application credential & \texttt{openstack application credential create --role member --access-rules
+  '[{"path": "/v2.1/servers", "method": "POST", "service": "compute"}]' deploiement} : rôle minimal, règle
+  d'accès limitée à la création de serveurs, expiration conseillée ; le job utilise
+  \texttt{auth\_type: v3applicationcredential} \\
+(b) & Trust & Alice délègue à l'utilisateur de service de Heat son rôle \texttt{member} sur le projet, avec
+  \texttt{openstack trust create} ; Heat s'authentifie ensuite avec le \texttt{trust\_id} et agit au nom d'Alice \\
+(c) & Token de service & Nova joint \texttt{X-Service-Token} (\texttt{send\_service\_user\_token}) ; le service
+  destinataire exige le rôle de \texttt{service\_token\_roles}, et Keystone accepte le token expiré dans la fenêtre
+  \texttt{allow\_expired\_window} \\
+(d) & MFA, avec TOTP & \texttt{totp} dans \texttt{[auth] methods}, un secret créé avec
+  \texttt{openstack credential create --type totp}, puis
+  \texttt{openstack user set --enable-multi-factor-auth --multi-factor-auth-rule password,totp} \\
+(e) & Fédération & Le partenaire déclare un IdP (\texttt{openstack identity provider create}), un mapping qui
+  traduit ses attributs en groupes locaux, un protocole (\texttt{saml2} ou \texttt{openid}) et des affectations
+  de rôle aux groupes \\
+\bottomrule
+\end{tabular}
+\end{center}
+Le mot de passe n'est le bon choix pour aucun des cinq cas : (a) et (b) demandent une délégation, (c) un
+second token, (d) un second facteur et (e) un IdP.
+\end{correction}
+
+\begin{exercice}{Diagnostiquer cinq pannes}\label{ex:ks-diag}
+Pour chaque symptôme, donner la cause probable et la correction.
+\begin{enumerate}[label=(\alph*),nosep]
+  \item \texttt{openstack server list} répond « Could not find project: prod (HTTP 404) » alors que le projet
+        existe dans le domaine \texttt{acme}. L'utilisateur est dans \texttt{Default}.
+  \item Une requête sur deux renvoie \texttt{401} derrière le répartiteur de charge, avec le même token ;
+        les journaux de \texttt{controller2} indiquent un échec de validation.
+  \item Nova répond \texttt{503} à toutes les requêtes, mais \texttt{openstack token issue} fonctionne depuis le
+        poste d'administration.
+  \item \texttt{EndpointNotFound: public endpoint for volumev3 service in RegionOne region not found}.
+  \item Sur un seul contrôleur, des tokens tout juste émis sont refusés comme expirés.
+\end{enumerate}
+\end{exercice}
+\begin{correction}
+\paragraph{(a)} Le projet est cherché dans le domaine de l'utilisateur (\texttt{Default}) alors qu'il est dans
+\texttt{acme} : renseigner \texttt{OS\_PROJECT\_DOMAIN\_NAME=acme} (ou \texttt{--os-project-domain-name}).
+
+\paragraph{(b)} Les deux contrôleurs n'ont pas le même dépôt de clés Fernet : \texttt{controller2} ne peut pas
+déchiffrer les tokens émis par \texttt{controller1}. Le répartiteur alterne, d'où une requête sur deux.
+Comparer \texttt{/etc/keystone/fernet-keys/} sur les deux nœuds et copier le dépôt du nœud qui fait la rotation
+vers les autres (section~\ref{sec:ks-formats}).
+
+\paragraph{(c)} Le middleware de Nova ne joint pas Keystone : \texttt{auth\_url} ou le compte de
+\texttt{[keystone\_authtoken]} est mauvais dans \texttt{nova.conf}, ou un pare-feu bloque le port 5000 depuis
+l'hôte de Nova. Le poste d'administration n'utilise pas la même route : le test doit se faire depuis l'hôte
+de Nova (section~\ref{sec:ks-middleware}).
+
+\paragraph{(d)} Le catalogue ne contient pas d'endpoint \texttt{public} pour le type \texttt{volumev3} dans cette région :
+service Cinder non déclaré, endpoint absent ou désactivé. \texttt{openstack endpoint list --service volumev3}
+le confirme ; \texttt{openstack endpoint create} ou \texttt{openstack endpoint set --enable} le corrige
+(section~\ref{sec:ks-catalogue}).
+
+\paragraph{(e)} Horloge décalée sur ce nœud : il compare l'expiration du token à une heure erronée.
+Synchroniser les horloges (NTP ou \texttt{chrony}) sur tous les nœuds.
+\end{correction}
+
+\clearpage
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:ks-recap}
+% ---------------------------------------------------------------------
+
+\begin{center}
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    boite/.style={pastille, psvc, minimum width=4.6cm, minimum height=1.6cm, text width=4.4cm, font=\footnotesize}]
+  \node[pfoc, minimum width=3.4cm, minimum height=1.3cm] (c) at (8.0,4.0) {Keystone};
+  \node[boite] (b1) at (2.4,7.6) {\textbf{Identité}\\ {\scriptsize\mdseries domaines, projets, utilisateurs, groupes}\\ {\scriptsize\S\,\ref{sec:ks-concepts}, \ref{sec:ks-domaines}}};
+  \node[boite] (b2) at (8.0,7.6) {\textbf{Autorisation}\\ {\scriptsize\mdseries rôles, affectations, portées, \texttt{policy}}\\ {\scriptsize\S\,\ref{sec:ks-rbac}}};
+  \node[boite] (b3) at (13.6,7.6) {\textbf{Tokens}\\ {\scriptsize\mdseries Fernet, JWS, expiration, révocation}\\ {\scriptsize\S\,\ref{sec:ks-tokens}}};
+  \node[boite] (b4) at (2.4,4.0) {\textbf{Catalogue}\\ {\scriptsize\mdseries services, endpoints, régions}\\ {\scriptsize\S\,\ref{sec:ks-catalogue}}};
+  \node[boite] (b5) at (13.6,4.0) {\textbf{Sources d'identité}\\ {\scriptsize\mdseries SQL, LDAP, fédération}\\ {\scriptsize\S\,\ref{sec:ks-backends}, \ref{sec:ks-federation}}};
+  \node[boite] (b6) at (2.4,0.4) {\textbf{Délégation}\\ {\scriptsize\mdseries application credentials, trusts, MFA, limites}\\ {\scriptsize\S\,\ref{sec:ks-avance}}};
+  \node[boite] (b7) at (8.0,0.4) {\textbf{Services}\\ {\scriptsize\mdseries \texttt{keystonemiddleware}, tokens de service}\\ {\scriptsize\S\,\ref{sec:ks-middleware}}};
+  \node[boite] (b8) at (13.6,0.4) {\textbf{Exploitation}\\ {\scriptsize\mdseries architecture, installation, sécurité}\\ {\scriptsize\S\,\ref{sec:ks-archi}, \ref{sec:ks-deploiement}, \ref{sec:ks-securite}}};
+  \foreach \b in {b1,b2,b3,b4,b5,b6,b7,b8} \draw[fluxo] (c) -- (\b);
+\end{tikzpicture}}
+\end{center}
+
+\begin{aretenir}
+\begin{itemize}
+  \item Keystone authentifie les utilisateurs et les services, délivre des tokens, stocke domaines, projets,
+        groupes, rôles et affectations, et publie le catalogue des endpoints. Tous les autres services le
+        consultent à chaque requête.
+  \item Les droits ne sont pas portés par l'utilisateur : ils viennent d'une affectation (acteur, rôle, cible)
+        sur un projet, un domaine ou le système. Keystone enregistre les rôles ; chaque service applique sa propre
+        \texttt{policy}.
+  \item Un domaine contient des utilisateurs, des groupes et des projets ; un nom n'est unique qu'à
+        l'intérieur d'un domaine, d'où les options \texttt{--*-domain}.
+  \item Un token est limité à une portée (projet, domaine ou système) ; un token non limité ne contient ni rôle ni
+        catalogue. Il se présente dans \texttt{X-Auth-Token} et dure une heure par défaut.
+  \item Un token Fernet n'est pas stocké : il est chiffré avec une clé du dépôt. La rotation promeut la clé en
+        attente et supprime les plus anciennes ; $\texttt{max\_active\_keys}\ge\lceil T/R\rceil+2$.
+  \item Le catalogue associe un type de service à des endpoints \texttt{public}, \texttt{internal} et
+        \texttt{admin}, par région ; le client choisit l'interface et la région.
+  \item Les utilisateurs viennent de la base SQL, d'un annuaire LDAP en lecture seule (un backend par domaine) ou
+        d'un fournisseur d'identité fédéré, dont un \emph{mapping} traduit les attributs en groupes.
+  \item Application credentials, trusts, MFA et limites unifiées répondent à quatre besoins distincts :
+        automatiser, déléguer, renforcer l'authentification et plafonner les ressources.
+  \item \texttt{keystonemiddleware} valide le token de chaque requête, avec un cache de 300 s : \texttt{401} si
+        le token est invalide, \texttt{503} si Keystone est injoignable. Une révocation n'est pas immédiate.
+  \item Keystone n'a pas d'état local, hors dépôts de clés : on le déploie en plusieurs exemplaires, derrière
+        un répartiteur de charge, avec des clés identiques et des horloges synchronisées.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.4}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{9.6cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Obtenir un token & \texttt{openstack token issue} & \ref{sec:ks-obtenir} \\
+Révoquer un token & \texttt{openstack token revoke TOKEN} & \ref{sec:ks-revocation} \\
+Créer domaine, projet, utilisateur & \texttt{openstack domain|project|user create} & \ref{sec:ks-deploiement} \\
+Affecter un rôle & \texttt{openstack role add --user U --project P ROLE} & \ref{sec:ks-rbac} \\
+Voir les droits effectifs & \texttt{openstack role assignment list --user U --effective --names} & \ref{sec:ks-rbac} \\
+Déclarer service et endpoint & \texttt{openstack service create} ; \texttt{openstack endpoint create REGION TYPE INTERFACE URL} & \ref{sec:ks-catalogue} \\
+Lister le catalogue & \texttt{openstack catalog list} & \ref{sec:ks-catalogue} \\
+Initialiser Keystone & \texttt{keystone-manage db\_sync}, \texttt{fernet\_setup}, \texttt{bootstrap} & \ref{sec:ks-deploiement} \\
+Faire tourner les clés Fernet & \texttt{keystone-manage fernet\_rotate} & \ref{sec:ks-formats} \\
+Créer une application credential & \texttt{openstack application credential create} & \ref{sec:ks-avance} \\
+Déléguer par trust & \texttt{openstack trust create TRUSTOR TRUSTEE} & \ref{sec:ks-avance} \\
+Activer le TOTP & \texttt{openstack credential create --type totp U SECRET} & \ref{sec:ks-avance} \\
+Fédérer un IdP & \texttt{openstack identity provider create}, \texttt{mapping create}, \texttt{federation protocol create} & \ref{sec:ks-federation} \\
+Fixer des limites & \texttt{openstack registered limit create}, \texttt{limit create} & \ref{sec:ks-avance} \\
+Diagnostiquer & \texttt{openstack --debug token issue} & \ref{sec:ks-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Modéliser une organisation en domaines, projets, groupes et affectations de rôle, et écrire les
+        commandes correspondantes (exercice~\ref{ex:ks-modele}).
+  \item Lire un token : utilisateur, portée, rôles, endpoints, expiration (exercice~\ref{ex:ks-lire}).
+  \item Dimensionner et faire tourner les clés Fernet (exercice~\ref{ex:ks-fernet}).
+  \item Raisonner sur le cache et la révocation, y compris en cas de panne de Keystone
+        (exercice~\ref{ex:ks-cache}).
+  \item Écrire des règles de correspondance pour un fournisseur d'identité (exercice~\ref{ex:ks-mapping}).
+  \item Choisir entre application credential, trust, token de service, MFA et fédération
+        (exercice~\ref{ex:ks-delegation}).
+  \item Diagnostiquer une erreur d'authentification à partir de son code HTTP et de son message
+        (exercice~\ref{ex:ks-diag}).
+\end{itemize}
+\end{savoirfaire}

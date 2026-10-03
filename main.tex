@@ -52,12 +52,21 @@
 \usepackage[utf8]{inputenc}%pour glossaire
 \usepackage[T1]{fontenc}
 \usepackage{lmodern} % police Latin Modern (équivalent de Computer Modern en T1)
+% Pas de ligature en police machine à écrire : \texttt{--option} garde ses deux tirets
+% (sans cela, \texttt{--} est composé comme un tiret demi-cadratin). Aucune autre fonction de microtype.
+\usepackage[protrusion=false,expansion=false,tracking=false,kerning=false,spacing=false]{microtype}
+\DisableLigatures[-]{encoding = *, family = tt*}
+\setlength{\emergencystretch}{2em} % tolère un espacement un peu plus lâche plutôt qu'une ligne qui déborde
 \usepackage[french]{babel}
 
 %%%%% Charte graphique INSA CVL %%%%%
 \usepackage{xcolor}
 \definecolor{insarouge}{HTML}{E42618} % rouge du logo INSA (couleur principale)
 \definecolor{insagris}{HTML}{5F5F5F}  % gris du logo INSA (couleur secondaire)
+% Couleurs complémentaires des schémas d'architecture (relevées sur le schéma de la présentation Trove)
+\definecolor{insaorange}{HTML}{C57F17}  % contour et flèches des services « voisins »
+\definecolor{insapeche}{HTML}{FCDDB0}   % fond des services « voisins »
+\definecolor{insapeche2}{HTML}{FCE2BB}  % fond des encadrés d'idée
 
 %%%%% Pour la biblio %%%%%
 \usepackage{csquotes}
@@ -75,7 +84,12 @@
   backgroundcolor=\color{insagris!8},
   frame=single,
   rulecolor=\color{insagris!60},
-  breaklines=true
+  breaklines=true,
+  upquote=true, % apostrophes droites dans le code (commandes SQL, shell)
+  % lettres accentuées (UTF-8) dans les commentaires des listings
+  literate={é}{{\'e}}1 {è}{{\`e}}1 {ê}{{\^e}}1 {ë}{{\"e}}1 {à}{{\`a}}1 {â}{{\^a}}1
+           {î}{{\^i}}1 {ï}{{\"i}}1 {ô}{{\^o}}1 {ù}{{\`u}}1 {û}{{\^u}}1 {ç}{{\c c}}1
+           {É}{{\'E}}1 {È}{{\`E}}1 {À}{{\`A}}1 {Ç}{{\c C}}1 {œ}{{\oe}}1
 }
 \lstdefinestyle{terminal}{
   backgroundcolor=\color{black!5},
@@ -139,6 +153,45 @@
   bus/.style     = {draw=insagris, fill=insagris!15, thick, minimum height=6mm, align=center},
   flux/.style    = {-{Stealth[length=2mm]}, thick, insagris},
 }
+% Schémas « à la Trove » : pastilles colorées par rôle, flèches étiquetées, encadré d'idée.
+%   pcli  : client (CLI, Horizon, API REST)       pfoc : service au centre du schéma (rouge plein)
+%   psvc  : autre service OpenStack (pêche)       pdat : donnée, instance, ressource (rose)
+%   pgris : infrastructure, annuaire, bus         etiqf: étiquette posée sur une flèche
+%   fluxo / fluxr / fluxd : flèche orange (appel entre services) / rouge / rouge pointillée (asynchrone)
+%   callout : encadré pêche sous le schéma         num : pastille numérotée d'une étape
+% Diagrammes de séquence : acteur (en-tête), vie (ligne de vie), msg / rep (message / réponse),
+%   macros \seqmsg et \seqrep (définies sous le \tikzset)
+\tikzset{
+  pastille/.style = {rounded corners=0.3cm, minimum height=0.65cm, inner xsep=7pt, inner ysep=3pt,
+                     thick, align=center, font=\footnotesize\bfseries},
+  pcli/.style  = {pastille, draw=insarouge, fill=white, text=insarouge},
+  pfoc/.style  = {pastille, draw=black, fill=insarouge, text=white, line width=1.2pt},
+  psvc/.style  = {pastille, draw=insaorange, fill=insapeche, text=black},
+  pdat/.style  = {pastille, draw=insarouge!90!black, fill=insarouge!30, text=black},
+  pgris/.style = {pastille, draw=insagris, fill=insagris!12, text=black},
+  etiqf/.style = {fill=white, inner sep=1.5pt, font=\scriptsize, text=insagris, align=center},
+  fluxo/.style = {-{Stealth[length=2mm]}, thick, insaorange},
+  fluxr/.style = {-{Stealth[length=2mm]}, thick, insarouge},
+  fluxd/.style = {-{Stealth[length=2mm]}, thick, insarouge, dashed},
+  callout/.style = {fill=insapeche2, rounded corners=3pt, inner sep=5pt, align=center,
+                    font=\footnotesize},
+  num/.style   = {circle, fill=insarouge, text=white, font=\scriptsize\bfseries, inner sep=1pt,
+                  minimum size=4.5mm},
+  acteur/.style = {draw=insarouge, fill=insarouge!8, thick, rounded corners=2pt, minimum height=0.7cm,
+                   minimum width=2.2cm, align=center, font=\footnotesize\bfseries, inner sep=3pt},
+  vie/.style   = {insagris!70, dashed, thin},
+  msg/.style   = {-{Stealth[length=2mm]}, thick, insagris},
+  rep/.style   = {-{Stealth[length=2mm]}, thick, insagris, dashed},
+}
+% Messages d'un diagramme de séquence : \seqmsg{x de départ}{x d'arrivée}{y}{numéro (ou vide)}{étiquette}
+% (flèche pleine) et \seqrep (flèche pointillée = réponse). La pastille numérotée se place du côté de
+% l'émetteur, hors de la flèche, pour ne pas recouvrir l'étiquette posée au-dessus.
+\newcommand{\seqmsg}[5]{%
+  \draw[msg] (#1,#3) -- (#2,#3) node[midway, above=1pt, font=\footnotesize, align=center, text=black, fill=white, inner sep=1pt] {#5};%
+  \ifx\relax#4\relax\else\node[num] at ({#1+(#2>#1?-0.4:0.4)},#3) {#4};\fi}
+\newcommand{\seqrep}[5]{%
+  \draw[rep] (#1,#3) -- (#2,#3) node[midway, above=1pt, font=\footnotesize, align=center, text=black, fill=white, inner sep=1pt] {#5};%
+  \ifx\relax#4\relax\else\node[num] at ({#1+(#2>#1?-0.4:0.4)},#3) {#4};\fi}
 
 %%%%% Encadrés (définitions, résultats, remarques, récapitulatifs, exercices) %%%%%
 \usepackage[skins,breakable]{tcolorbox}
@@ -149,6 +202,8 @@
   fonttitle=\bfseries,title={#1}}
 \newtcolorbox{remarque}[1][Remarque]{colback=insagris!7,colframe=insagris,
   fonttitle=\bfseries,title={#1}}
+% Idée à retenir en une phrase, sans titre (même pêche que l'encadré sous les schémas)
+\newtcolorbox{pointcle}{colback=insapeche2,colframe=insaorange,boxrule=0.5pt,arc=3pt}
 % Récapitulatifs de fin de chapitre : points à retenir et savoir-faire
 \newtcolorbox{aretenir}{colback=insarouge!6,colframe=insarouge,boxrule=1pt,
   fonttitle=\bfseries,title={À retenir}}

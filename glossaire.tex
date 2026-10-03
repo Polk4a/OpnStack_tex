@@ -1,6 +1,7 @@
 % =====================================================================
 %  glossaire.tex : entrées du glossaire (chargé par main.tex via \input{glossaire})
-%  Utilisation dans le texte : \gls{iaas} (le mot apparaît en rouge).
+%  Utilisation dans le texte : \gls{iaas} (le mot apparaît en rouge) ; \Gls{...} met la
+%  première lettre en capitale.
 %  Toutes les entrées sont imprimées en fin de document (\glsaddall dans main.tex).
 %  La clé sort={...} donne le texte brut utilisé pour le tri (accents, commandes).
 %  Compilation : deux passes de pdflatex suffisent (\makenoidxglossaries).
@@ -9,8 +10,101 @@
 \newglossaryentry{apirest}{name={API REST}, sort={API REST},
   description={Interface d'accès à un service par requêtes HTTP ; chaque service OpenStack expose la sienne, et la ligne de commande comme Horizon n'en sont que des clients}}
 
+\newglossaryentry{appcred}{name={application credential}, sort={application credential},
+  description={Identifiant et secret délivrés à une application pour qu'elle s'authentifie à la place de l'utilisateur, avec seulement une partie de ses rôles et, éventuellement, une date d'expiration}}
+
+\newglossaryentry{authentification}{name={authentification}, sort={authentification},
+  description={Processus qui confirme l'identité d'un utilisateur ; Keystone valide les identifiants puis délivre un token}}
+
+\newglossaryentry{autorisation}{name={autorisation}, sort={autorisation},
+  description={Décision d'autoriser ou de refuser une action à un utilisateur authentifié, d'après ses rôles ; chaque service OpenStack l'applique avec ses propres règles}}
+
+\newglossaryentry{cadf}{name={CADF}, sort={CADF},
+  description={\emph{Cloud Auditing Data Federation} : format normalisé d'événements d'audit, utilisé par défaut pour les notifications de Keystone}}
+
+\newglossaryentry{catalogue}{name={catalogue de services}, sort={catalogue de services}, text={catalogue},
+  description={Liste des services de la plateforme et de leurs endpoints, par région et par interface ; Keystone l'inclut dans les tokens limités à un projet}}
+
+\newglossaryentry{domaine}{name={domaine}, sort={domaine},
+  description={Conteneur de plus haut niveau de Keystone : il regroupe des projets, des utilisateurs et des groupes qui forment une même frontière administrative}}
+
+\newglossaryentry{endpoint}{name={endpoint}, sort={endpoint},
+  description={Adresse réseau, généralement une URL, à laquelle on accède à un service ; Keystone en distingue trois interfaces : \texttt{public}, \texttt{internal} et \texttt{admin}}}
+
+\newglossaryentry{federation}{name={fédération d'identité}, sort={federation d'identite},
+  description={Délégation de l'authentification à un fournisseur d'identité externe de confiance, par SAML 2.0 ou OpenID Connect}}
+
+\newglossaryentry{fernet}{name={Fernet}, sort={Fernet},
+  description={Format de token par défaut de Keystone : chaîne opaque chiffrée (AES-128-CBC) et signée (HMAC-SHA256) avec des clés conservées dans un dépôt local}}
+
+\newglossaryentry{groupe}{name={groupe}, sort={groupe},
+  description={Ensemble d'utilisateurs d'un domaine ; un rôle attribué à un groupe s'applique à tous ses membres}}
+
 \newglossaryentry{hyperviseur}{name={hyperviseur}, sort={hyperviseur},
   description={Logiciel qui fait tourner plusieurs machines virtuelles isolées sur un même serveur physique (par exemple KVM) ; OpenStack le pilote sans le remplacer}}
 
 \newglossaryentry{iaas}{name={IaaS}, sort={IaaS},
   description={\emph{Infrastructure as a Service} : modèle de cloud où l'infrastructure (calcul, réseau, stockage) est fournie à la demande ; l'utilisateur gère ce qui s'exécute dessus}}
+
+\newglossaryentry{idp}{name={fournisseur d'identité (IdP)}, sort={fournisseur d'identite}, text={fournisseur d'identité}, plural={fournisseurs d'identité},
+  description={Service externe qui authentifie l'utilisateur et transmet à Keystone une assertion signée contenant son identité et ses attributs}}
+
+\newglossaryentry{jws}{name={JWS}, sort={JWS},
+  description={\emph{JSON Web Signature} : second format de token de Keystone, signé avec une clé asymétrique (ES256) ; son contenu n'est pas opaque}}
+
+\newglossaryentry{ldap}{name={LDAP}, sort={LDAP},
+  description={\emph{Lightweight Directory Access Protocol} : protocole d'accès à un annuaire (par exemple Active Directory) ; Keystone peut y lire utilisateurs et groupes, en lecture seule}}
+
+\newglossaryentry{mapping}{name={mapping}, sort={mapping},
+  description={Ensemble de règles qui traduisent les attributs fournis par un fournisseur d'identité en utilisateur, groupes et projets Keystone}}
+
+\newglossaryentry{mfa}{name={authentification multifacteur (MFA)}, sort={authentification multifacteur}, text={authentification multifacteur},
+  description={Authentification qui exige plusieurs méthodes successives, par exemple un mot de passe puis un code TOTP}}
+
+\newglossaryentry{middleware}{name={middleware}, sort={middleware},
+  description={Composant WSGI placé devant l'application d'un service ; \texttt{keystonemiddleware} (module \texttt{auth\_token}) y valide le token de chaque requête auprès de Keystone}}
+
+\newglossaryentry{oidc}{name={OpenID Connect (OIDC)}, sort={OpenID Connect}, text={OpenID Connect},
+  description={Protocole de fédération au format JSON, construit sur OAuth 2.0}}
+
+\newglossaryentry{policy}{name={policy}, sort={policy}, plural={policies},
+  description={Règle d'accès évaluée par chaque service (bibliothèque \texttt{oslo.policy}) pour décider si les rôles présents dans le token autorisent l'action demandée}}
+
+\newglossaryentry{portee}{name={portée (scope)}, sort={portee}, text={portée}, plural={portées},
+  description={Périmètre sur lequel un token confère des droits : un projet, un domaine ou le système entier ; un token non délimité n'a aucune portée}}
+
+\newglossaryentry{projet}{name={projet (tenant)}, sort={projet}, text={projet}, plural={projets},
+  description={Conteneur qui regroupe ou isole des ressources ; « tenant » est l'ancien nom du projet}}
+
+\newglossaryentry{rbac}{name={RBAC}, sort={RBAC},
+  description={\emph{Role-Based Access Control} : contrôle d'accès fondé sur les rôles attribués aux utilisateurs et aux groupes}}
+
+\newglossaryentry{region}{name={région}, sort={region},
+  description={Division générale d'un déploiement OpenStack, qui peut contenir des sous-régions ; chaque endpoint du catalogue est rattaché à une région}}
+
+\newglossaryentry{role}{name={rôle}, sort={role},
+  description={Ensemble de droits attribué à un utilisateur ou à un groupe sur un projet, un domaine ou le système ; les services l'interprètent pour décider des accès}}
+
+\newglossaryentry{saml2}{name={SAML 2.0}, sort={SAML},
+  description={\emph{Security Assertion Markup Language} : protocole de fédération au format XML, courant dans les universités et les entreprises}}
+
+\newglossaryentry{sp}{name={fournisseur de services (SP)}, sort={fournisseur de services}, text={fournisseur de services}, plural={fournisseurs de services},
+  description={Dans une fédération, service qui s'appuie sur un fournisseur d'identité ; ici Keystone, dont les tokens servent aux autres services OpenStack}}
+
+\newglossaryentry{sso}{name={SSO}, sort={SSO},
+  description={\emph{Single Sign-On}, authentification unique : une seule connexion donne accès à plusieurs services}}
+
+\newglossaryentry{token}{name={token (jeton)}, sort={token}, text={token}, plural={tokens},
+  description={Chaîne de caractères qui prouve l'identité d'un utilisateur et donne accès aux API ; valide pour une durée limitée, elle peut être révoquée à tout moment}}
+
+\newglossaryentry{totp}{name={TOTP}, sort={TOTP},
+  description={\emph{Time-based One-Time Password} : code à usage unique de six chiffres, calculé à partir d'un secret partagé et de l'heure ; second facteur pris en charge par Keystone}}
+
+\newglossaryentry{trust}{name={trust}, sort={trust},
+  description={Délégation par un utilisateur (le \emph{trustor}) d'une partie de ses rôles sur un projet à un autre utilisateur (le \emph{trustee})}}
+
+\newglossaryentry{utilisateur}{name={utilisateur}, sort={utilisateur},
+  description={Représentation numérique d'une personne, d'un système ou d'un service qui utilise les services OpenStack}}
+
+\newglossaryentry{wsgi}{name={WSGI}, sort={WSGI},
+  description={\emph{Web Server Gateway Interface} : interface standard entre un serveur web et une application Python ; Keystone s'exécute derrière Apache grâce à \texttt{mod\_wsgi}}}
