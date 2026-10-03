@@ -1,0 +1,342 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%  COURS OPENSTACK -- basé sur le template INSA CENTRE VAL DE LOIRE : main.tex
+%
+%  - Chaque partie du document est un fichier séparé, importé plus bas avec
+%    \include{...} : pagetitre, introduction, chap_presentation, chap_<service> ...,
+%    conclusion. Ces fichiers ne contiennent ni préambule ni \begin{document}. Un chapitre
+%    commence par \section{...} (la classe est article : un chapitre = une \section) ;
+%    l'introduction et la conclusion sont des \section* ajoutées au sommaire.
+%  - Un chapitre = un fichier chap_<nom>.tex. L'ordre des chapitres (et donc leur numéro)
+%    est celui des \include plus bas : pour réordonner, déplacer une ligne.
+%  - Nouveau document : modifier le bloc « Informations du document »,
+%    ajouter ou retirer des \include, décommenter les sections utiles
+%    (résumés, table des illustrations, annexes).
+%  - Compilation : pdflatex main, biber main, pdflatex main, pdflatex main.
+%    (deux passes de pdflatex au minimum : sommaire, renvois, page de titre TikZ)
+%  - Couleurs de la charte : insarouge (principale) et insagris (secondaire),
+%    relevées sur le logo INSA. À utiliser dans les chapitres (figures, tableaux).
+%  - Glossaire : entrées dans glossaire.tex, appel \gls{iaas} dans le texte.
+%    Bibliographie : références dans sources.bib, appel \parencite{cle}.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\documentclass[10pt]{article}
+
+%%%%% Informations du document (à modifier pour chaque document) %%%%%
+\newcommand{\doctitre}{OpenStack}
+\newcommand{\docsoustitre}{Notes de cours -- Cloud et infrastructures distribuées}
+\newcommand{\doctagline}{Un cloud IaaS open source, service par service}
+\newcommand{\docauteur}{Niels LOPEZ}
+\newcommand{\docprof}{[enseignant à renseigner]}
+\newcommand{\docecole}{INSA Centre Val de Loire}
+\newcommand{\docdate}{\today}
+% Nombre de pages de garde au début du document : la page de titre (pagetitre.tex) ou des pages
+% importées en PDF (\includepdf). Elles sont comptées dans la numérotation (le numéro affiché est
+% celui de la page du PDF, sans décalage) mais n'ont ni en-tête ni numéro : le logo n'apparaît
+% qu'après elles. 1 = la page de titre seule ; 0 = aucune page de garde.
+\newcounter{pagesdegarde}
+\setcounter{pagesdegarde}{1}
+
+%%%%% Package de base %%%%%
+\usepackage{graphicx} % pour insérer des images
+\graphicspath{{images/}}
+\usepackage{float} % pour placer les images ([H])
+
+\usepackage{amsmath}% pour les équations
+\usepackage{amssymb}% pour les symboles mathématiques (\mathbb, ...)
+\numberwithin{figure}{section}%pour les numérotations des figures
+\numberwithin{equation}{section}%idem pour les équations
+\numberwithin{table}{section}%idem pour les tableaux
+
+\usepackage{array}%pour les tableaux
+\usepackage{makecell}  % idem
+
+\usepackage[utf8]{inputenc}%pour glossaire
+\usepackage[T1]{fontenc}
+\usepackage{lmodern} % police Latin Modern (équivalent de Computer Modern en T1)
+\usepackage[french]{babel}
+
+%%%%% Charte graphique INSA CVL %%%%%
+\usepackage{xcolor}
+\definecolor{insarouge}{HTML}{E42618} % rouge du logo INSA (couleur principale)
+\definecolor{insagris}{HTML}{5F5F5F}  % gris du logo INSA (couleur secondaire)
+
+%%%%% Pour la biblio %%%%%
+\usepackage{csquotes}
+\usepackage[backend=biber,style=apa]{biblatex} % pour la biblio
+\addbibresource{sources.bib} % fichier contenant les références
+% autorise les coupures de ligne dans les URL et les DOI de la bibliographie
+\setcounter{biburlnumpenalty}{100}
+\setcounter{biburlucpenalty}{100}
+\setcounter{biburllcpenalty}{100}
+
+%%%%% Pour les lignes de code %%%%%
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{insagris!8},
+  frame=single,
+  rulecolor=\color{insagris!60},
+  breaklines=true
+}
+\lstdefinestyle{terminal}{
+  backgroundcolor=\color{black!5},
+  basicstyle=\ttfamily\small\color{black},
+  frame=single,
+  framerule=0pt,
+  xleftmargin=1em,
+  showstringspaces=false,
+  breaklines=true,
+  escapeinside={(*@}{@*)},
+}
+\newcommand{\prompt}{\textcolor{gray}{\texttt{user@linux:~\$}} }
+\lstdefinestyle{darkterminal}{
+  backgroundcolor=\color{black},
+  basicstyle=\ttfamily\small\color{green},
+  frame=single,
+  framerule=0pt,
+  xleftmargin=1em,
+  breaklines=true,
+  showstringspaces=false
+}
+\lstdefinestyle{verbatimlike}{
+    basicstyle=\ttfamily\small,     % police type machine à écrire, comme verbatim
+    breaklines=true,                % retour automatique à la ligne
+    breakatwhitespace=false,        % casse les mots si nécessaire
+    showstringspaces=false,         % pas de soulignement des espaces dans les chaînes
+    numbers=none,                   % pas de numérotation
+    frame=none,                     % pas de cadre
+    framerule=0pt,                  % épaisseur de la bordure à 0
+    rulecolor=\color{black},        % couleur du cadre (inutile ici)
+    backgroundcolor=,               % pas de fond
+    tabsize=4,                      % largeur d'une tabulation
+    keepspaces=true,                % préserve les espaces consécutifs
+    columns=flexible                % adapte les colonnes pour éviter les débordements
+}
+
+\usepackage{fancyvrb} %pour les retours à la ligne dans verbatim
+
+\usepackage{enumitem} %pour les listes de puces
+\setlist[itemize,1]{label=\textcolor{insarouge}{\textemdash}} % puces rouges
+
+\usepackage{changepage} %pour dépasser dans les marges
+\usepackage{subcaption}    % pour gérer des figures côte à côte
+
+\usepackage[version=4]{mhchem}   % pour les équations chimiques
+\usepackage{booktabs}            % tableau plus soigné (optionnel, sinon \hline suffit)
+
+\usepackage{tikz}
+\usetikzlibrary{positioning, arrows.meta, fit, backgrounds, calc, shapes.geometric, babel,
+                decorations.pathmorphing, decorations.pathreplacing, patterns} % pour les graphs
+\usepackage{adjustbox}
+
+%%%%% Styles TikZ pour les schémas d'architecture (utilisés dans tous les chapitres) %%%%%
+% svc    : boîte d'un service OpenStack (Keystone, Nova...)   svcgris : composant secondaire
+% bus    : barre horizontale (API REST, bus de messages)      flux   : flèche entre deux composants
+\tikzset{
+  svc/.style     = {draw=insarouge, fill=insarouge!8, thick, rounded corners=2pt,
+                    minimum height=7mm, inner sep=3pt, align=center},
+  svcgris/.style = {draw=insagris, fill=insagris!8, thick, rounded corners=2pt,
+                    minimum height=7mm, inner sep=3pt, align=center},
+  bus/.style     = {draw=insagris, fill=insagris!15, thick, minimum height=6mm, align=center},
+  flux/.style    = {-{Stealth[length=2mm]}, thick, insagris},
+}
+
+%%%%% Encadrés (définitions, résultats, remarques, récapitulatifs, exercices) %%%%%
+\usepackage[skins,breakable]{tcolorbox}
+\tcbset{boxrule=0.6pt,arc=2pt,left=6pt,right=6pt,top=4pt,bottom=4pt}
+\newtcolorbox{definition}[1]{colback=insarouge!4,colframe=insarouge,
+  fonttitle=\bfseries,title={#1}}
+\newtcolorbox{resultat}[1]{colback=insarouge!10,colframe=insarouge!65!black,boxrule=1pt,
+  fonttitle=\bfseries,title={#1}}
+\newtcolorbox{remarque}[1][Remarque]{colback=insagris!7,colframe=insagris,
+  fonttitle=\bfseries,title={#1}}
+% Récapitulatifs de fin de chapitre : points à retenir et savoir-faire
+\newtcolorbox{aretenir}{colback=insarouge!6,colframe=insarouge,boxrule=1pt,
+  fonttitle=\bfseries,title={À retenir}}
+\newtcolorbox{savoirfaire}{colback=insagris!6,colframe=insagris,
+  fonttitle=\bfseries,title={Savoir-faire}}
+% Exercices (numérotés dans la section, cités par \ref{...}) et leur correction
+\newcounter{exercice}[section]
+\renewcommand{\theexercice}{\thesection.\arabic{exercice}}
+\newtcolorbox{exercicebox}[1]{colback=white,
+  colframe=insarouge,boxrule=0.8pt,fonttitle=\bfseries,coltitle=white,
+  colbacktitle=insarouge,title={Exercice~\theexercice\ --- #1}}
+% \refstepcounter est appelé avant la boîte : \label{...} placé dans l'énoncé donne le bon numéro
+\newenvironment{exercice}[1]{\refstepcounter{exercice}\begin{exercicebox}{#1}}{\end{exercicebox}}
+% Début d'une correction : le mot « Correction. » reste sur la même page que la première question
+\makeatletter
+\newcommand{\corrstart}{%
+  \captionsetup{hypcap=false}%
+  \textbf{\color{insagris}Correction.}\par\nobreak
+  \let\corr@oldparagraph\paragraph
+  \renewcommand{\paragraph}[1]{\corr@oldparagraph{##1}\@secpenalty=-300\relax}%
+  \@secpenalty=10000\relax}
+\makeatother
+\newtcolorbox{correction}{breakable,colback=insagris!5,colframe=insagris,boxrule=0pt,
+  toprule=0pt,bottomrule=0pt,rightrule=0pt,leftrule=2.5pt,sharp corners,
+  before upper={\corrstart}}
+
+%%%%% Titres de sections (rouge INSA) %%%%%
+\usepackage{titlesec}
+\titleformat{\section}
+  {\fontsize{15}{18}\selectfont\bfseries\color{insarouge}}{\thesection}{0.7em}{}
+  [{\vspace{0.5ex}\color{insarouge}\titlerule[0.8pt]}]
+% Titres non numérotés (\section*, sommaire, résumés) : même style. Le filet n'est tracé que si le titre
+% n'est pas vide (les titres vides servent à masquer le titre automatique de la liste des figures ou du glossaire).
+\newsavebox{\insatitbox}
+\newcommand{\insatitrenn}[1]{%
+  \sbox{\insatitbox}{\ignorespaces#1\unskip}%
+  \ifdim\wd\insatitbox=0pt\else #1\par\nobreak\vspace{0.5ex}{\color{insarouge}\hrule height 0.8pt}\fi}
+\titleformat{name=\section,numberless}
+  {\fontsize{15}{18}\selectfont\bfseries\color{insarouge}}{}{0pt}{\insatitrenn}
+\titleformat{\subsection}
+  {\fontsize{12}{14.5}\selectfont\bfseries\color{insarouge}}{\thesubsection}{0.7em}{}
+\titleformat{\subsubsection}
+  {\fontsize{10.5}{13}\selectfont\bfseries\color{insagris}}{\thesubsubsection}{0.7em}{}
+\titleformat{\paragraph}[runin]
+  {\normalfont\normalsize\bfseries\color{insagris}}{\theparagraph}{0.7em}{}
+\titlespacing*{\paragraph}{0pt}{1.5ex plus .5ex minus .2ex}{0.6em}
+\titlespacing*{\section}{0pt}{3ex plus 1ex minus .2ex}{1.8ex plus .2ex}
+\titlespacing*{\subsection}{0pt}{2.5ex plus 1ex minus .2ex}{1.2ex plus .2ex}
+\titlespacing*{\subsubsection}{0pt}{2ex plus .5ex minus .2ex}{1ex plus .2ex}
+
+%%%%% Pour le glossaire %%%%%
+\usepackage[hidelinks]{hyperref} %pour rendre les liens cliquables
+\hypersetup{pdftitle={\doctitre}, pdfauthor={\docauteur}, pdfsubject={\docsoustitre}}
+\usepackage[nonumberlist]{glossaries}
+\renewcommand{\glstextformat}[1]{\textcolor{insarouge}{#1}} %pour colorer les mots glossariés
+%\makeglossaries
+\makenoidxglossaries % pas de makeindex : deux passes de pdflatex suffisent
+\input{glossaire} % charge les entrées depuis glossaire.tex
+
+%%%%% Pour les corner images : logo INSA, titre du document, filet rouge %%%%%
+\usepackage{eso-pic} % for corner picutres
+\usepackage{ifthen}
+\AddToShipoutPictureBG{%
+ \ifthenelse{\value{page}>\value{pagesdegarde}}{%
+  % logo INSA en haut à gauche
+  \put(0.5cm,\paperheight-1.5cm){\includegraphics[width=6cm]{images/logo_insa.png}}%
+  % titre du document en haut à droite
+  \put(\paperwidth-0.5cm,\paperheight-0.9cm){\makebox(0,0)[r]{%
+    \normalfont\normalsize% (évite d'hériter du gras ou de la taille du texte en cours de page)
+    \renewcommand{\arraystretch}{1}% (évite d'hériter d'un \arraystretch réglé dans un tableau en cours de page)
+    \begin{tabular}{@{}r@{}}
+      {\bfseries\color{insarouge}\doctitre}\\
+      {\footnotesize\color{insagris}\docsoustitre}
+    \end{tabular}}}%
+  % filet rouge sous l'en-tête
+  \put(0.5cm,\paperheight-1.8cm){\color{insarouge}\rule{\dimexpr\paperwidth-1cm\relax}{1pt}}%
+ }{}%
+}
+
+%%%%% Numéro de page (rouge, centré en bas) %%%%%
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[C]{\small\bfseries\textcolor{insarouge}{\thepage}}
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \renewcommand{\headrulewidth}{0pt}%
+  \fancyfoot[C]{\small\bfseries\textcolor{insarouge}{\thepage}}%
+}
+
+%%%%% Coupures de ligne : évite les débordements dans les marges %%%%%
+\setlength{\emergencystretch}{1.5em}
+
+%%%%% Marges %%%%%
+\usepackage[a4paper,
+            top=3.5cm,
+            bottom=2.5cm,
+            left=2.2cm,
+            right=2.2cm,
+            headheight=14pt]{geometry}
+
+%%%%% Import de pages PDF (par exemple une page de garde) %%%%%
+% Import de pages PDF, par exemple une page de garde :
+%   \includepdf[pages={1,2}]{page1.pdf}   (puis régler le compteur pagesdegarde en haut du fichier)
+\usepackage{pdfpages}
+
+\title{\doctitre}
+\author{\docauteur}
+\date{\docdate}
+
+% Pour ne compiler que certains chapitres (la numérotation est conservée) :
+%\includeonly{chap_keystone}
+
+\begin{document}
+
+%%%%% Page de titre : page 1 du PDF, sans en-tête ni numéro (le sommaire est la page 2) %%%%%
+\input{pagetitre}
+
+%%%%% Sommaire %%%%%
+\renewcommand{\contentsname}{Sommaire}
+\setcounter{tocdepth}{2}
+\begingroup
+\fontsize{8pt}{9.4pt}\selectfont
+\tableofcontents
+\endgroup
+
+%%%%% Résumés %%%%%
+%\newpage
+%\section*{Résumés}
+%\addcontentsline{toc}{section}{Résumés}
+%\input{sections/0_summary}
+
+%%%%% Introduction (section non numérotée, ajoutée au sommaire) %%%%%
+\include{introduction}
+
+%%%%% Chapitres (un fichier par chapitre, chacun commence par \section) %%%%%
+% -- Présentation générale
+\include{chap_presentation} % 1. Présentation générale d'OpenStack
+
+% -- Services de base
+\include{chap_keystone}     % 2. Keystone : identité
+\include{chap_nova}         % 3. Nova : calcul
+\include{chap_placement}    % 4. Placement : suivi des ressources
+\include{chap_glance}       % 5. Glance : images
+\include{chap_neutron}      % 6. Neutron : réseau
+\include{chap_cinder}       % 7. Cinder : stockage bloc
+\include{chap_horizon}      % 8. Horizon : tableau de bord
+\include{chap_octavia}      % 9. Octavia : répartition de charge
+
+% -- Stockage objet, orchestration et services avancés
+\include{chap_swift}        % 10. Swift : stockage objet
+\include{chap_heat}         % 11. Heat : orchestration
+\include{chap_ironic}       % 12. Ironic : bare metal
+\include{chap_magnum}       % 13. Magnum : Kubernetes managé
+\include{chap_trove}        % 14. Trove : bases de données (DBaaS)
+
+% -- Mise en œuvre
+\include{chap_deploiement}  % 15. Méthodes de déploiement (hors service : retirer cette ligne si inutile)
+
+%%%%% Conclusion (section non numérotée, ajoutée au sommaire) %%%%%
+\include{conclusion}
+
+%%%%% Bibliographie %%%%%
+\clearpage
+\printbibliography[title=Bibliographie, heading=bibintoc]
+
+%%%%% Table des illustrations %%%%%
+%\newpage
+%\renewcommand{\listfigurename}{ }
+%\section*{Table des illustrations}
+%\addcontentsline{toc}{section}{Table des illustrations}
+%\listoffigures
+
+%%%%% Glossaire %%%%%
+\clearpage
+\phantomsection
+\section*{Glossaire}
+\addcontentsline{toc}{section}{Glossaire}
+\glsaddall
+\begingroup
+\renewcommand*{\glossarysection}[2][]{}% titre déjà donné ci-dessus
+\printnoidxglossary
+\endgroup
+
+%%%%% Annexes %%%%%
+%\newpage
+%\section{Annexes}
+%\input{annexes}
+
+\end{document}

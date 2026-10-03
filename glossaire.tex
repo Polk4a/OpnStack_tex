@@ -1,0 +1,16 @@
+% =====================================================================
+%  glossaire.tex : entrées du glossaire (chargé par main.tex via \input{glossaire})
+%  Utilisation dans le texte : \gls{iaas} (le mot apparaît en rouge).
+%  Toutes les entrées sont imprimées en fin de document (\glsaddall dans main.tex).
+%  La clé sort={...} donne le texte brut utilisé pour le tri (accents, commandes).
+%  Compilation : deux passes de pdflatex suffisent (\makenoidxglossaries).
+% =====================================================================
+
+\newglossaryentry{apirest}{name={API REST}, sort={API REST},
+  description={Interface d'accès à un service par requêtes HTTP ; chaque service OpenStack expose la sienne, et la ligne de commande comme Horizon n'en sont que des clients}}
+
+\newglossaryentry{hyperviseur}{name={hyperviseur}, sort={hyperviseur},
+  description={Logiciel qui fait tourner plusieurs machines virtuelles isolées sur un même serveur physique (par exemple KVM) ; OpenStack le pilote sans le remplacer}}
+
+\newglossaryentry{iaas}{name={IaaS}, sort={IaaS},
+  description={\emph{Infrastructure as a Service} : modèle de cloud où l'infrastructure (calcul, réseau, stockage) est fournie à la demande ; l'utilisateur gère ce qui s'exécute dessus}}

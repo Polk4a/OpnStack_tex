@@ -1,0 +1,50 @@
+% =====================================================================
+%  Introduction : importée par main.tex avec \include{introduction}.
+%  Section non numérotée, ajoutée au sommaire. Pas de figure flottante ici
+%  (la numérotation des figures suit celle des chapitres) : le plan est un
+%  dessin TikZ en place.
+% =====================================================================
+
+\phantomsection
+\section*{Introduction}
+\addcontentsline{toc}{section}{Introduction}
+
+Ce document rassemble les notes d'un cours consacré à OpenStack, plateforme de
+\gls{iaas} open source, et à ses principaux services. Il part d'une présentation générale
+(cloud, virtualisation, architecture) puis consacre un chapitre à chaque service :
+identité (Keystone), calcul (Nova, Placement), images (Glance), réseau (Neutron),
+stockage bloc et objet (Cinder, Swift), tableau de bord (Horizon), répartition de charge
+(Octavia), orchestration (Heat), bare metal (Ironic), Kubernetes managé (Magnum) et bases
+de données (Trove). Un dernier chapitre présente les méthodes de déploiement.
+
+\begin{center}
+\begin{tikzpicture}[>=Stealth, font=\scriptsize,
+    boite/.style={draw=insarouge, fill=insarouge!6, thick, rounded corners=2pt,
+                  text width=3.35cm, minimum height=2.5cm, align=center},
+    num/.style={draw=insarouge, fill=insarouge, text=white, font=\scriptsize\bfseries,
+                rounded corners=2pt, minimum height=5.5mm, inner xsep=5pt}]
+  \node[boite] (b1) at (0,0)
+    {\textbf{Présentation générale}\\[3pt] cloud, IaaS, architecture d'OpenStack};
+  \node[boite] (b2) at (4,0)
+    {\textbf{Services de base}\\[3pt] Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia};
+  \node[boite] (b3) at (8,0)
+    {\textbf{Services avancés}\\[3pt] Swift, Heat, Ironic, Magnum, Trove};
+  \node[boite] (b4) at (12,0)
+    {\textbf{Déploiement}\\[3pt] DevStack, Kolla-Ansible, installation manuelle};
+  \node[num] at (0,1.55)  {chap.~\ref{chap:presentation}};
+  \node[num] at (4,1.55)  {chap.~\ref{chap:keystone}--\ref{chap:octavia}};
+  \node[num] at (8,1.55)  {chap.~\ref{chap:swift}--\ref{chap:trove}};
+  \node[num] at (12,1.55) {chap.~\ref{chap:deploiement}};
+  \foreach \i/\j in {1/2, 2/3, 3/4}
+    \draw[->, insarouge, thick] (b\i.east) -- (b\j.west);
+\end{tikzpicture}
+\end{center}
+
+Les termes techniques sont définis dans le glossaire, en fin de document ; la
+documentation officielle d'OpenStack \parencite{openstack-docs} sert de référence commune
+à tous les chapitres.
+
+\paragraph{Prérequis et conventions.} Notions de Linux et de ligne de commande,
+de réseau (adressage IP, VLAN, routage) et de virtualisation (machine virtuelle,
+hyperviseur). Les exemples de commandes utilisent le client en ligne de commande
+unifié \texttt{openstack}.

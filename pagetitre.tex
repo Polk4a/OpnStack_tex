@@ -1,0 +1,57 @@
+% =====================================================================
+%  Page de titre : importée par main.tex avec \input{pagetitre}.
+%  Elle utilise \doctitre, \docsoustitre, \doctagline, \docauteur, \docprof,
+%  \docecole et \docdate, définis dans le bloc « Informations du document »
+%  de main.tex. Cette page est la page 1 du document : elle est comptée dans la
+%  numérotation, sans décalage entre le numéro affiché et la page du PDF. Elle
+%  n'a ni numéro (\thispagestyle{empty}) ni en-tête (compteur pagesdegarde de
+%  main.tex). Le \setcounter qui suit \end{titlepage} donne le numéro 2 au sommaire,
+%  car l'environnement titlepage remet sinon le compteur à 1.
+%  (TikZ « remember picture » : deux passes de compilation.)
+% =====================================================================
+\begin{titlepage}
+\thispagestyle{empty}
+\setcounter{page}{1}
+\begin{tikzpicture}[remember picture, overlay]
+  % logo en haut à gauche et filet rouge dessous (mêmes positions que l'en-tête des autres pages)
+  \node[anchor=south west, inner sep=0]
+    at ($(current page.north west)+(0.5cm,-1.5cm)$)
+    {\includegraphics[width=6cm]{images/logo_insa.png}};
+  \draw[insarouge, line width=1pt]
+    ($(current page.north west)+(0.5cm,-1.8cm)$) -- ($(current page.north east)+(-0.5cm,-1.8cm)$);
+
+  % titre du document sur un bandeau rouge
+  \fill[insarouge]
+    ($(current page.north west)+(0,-6.6cm)$) rectangle ($(current page.north east)+(0,-11.4cm)$);
+  \node[text=white, align=center, text width=17cm, font=\fontsize{38}{44}\selectfont\bfseries]
+    at ($(current page.north)+(0,-8.3cm)$) {\doctitre};
+  \node[text=white, align=center, text width=17cm, font=\Large]
+    at ($(current page.north)+(0,-10.1cm)$) {\docsoustitre};
+
+  % accroche et cours
+  \node[text=insagris, align=center, text width=16cm, font=\Large\itshape]
+    at ($(current page.north)+(0,-13.0cm)$) {\doctagline};
+  \node[text=insagris, align=center, text width=16cm, font=\large]
+    at ($(current page.north)+(0,-14.4cm)$) {Cours de \docprof{} -- \docecole};
+
+  % motif : des services OpenStack posés sur leur API REST, elle-même posée sur l'infrastructure
+  \begin{scope}[shift={($(current page.north)+(0,-18.4cm)$)}, >=Stealth, font=\small]
+    \foreach \x/\nom in {-6.3/Keystone, -4.2/Nova, -2.1/Neutron, 0/Glance, 2.1/Cinder, 4.2/Swift, 6.3/Horizon} {
+      \node[svc, minimum width=1.85cm, font=\footnotesize] at (\x,0.85) {\nom};
+      \draw[insagris, thick] (\x,0.5) -- (\x,0.15);
+    }
+    \node[bus, minimum width=14.6cm, font=\footnotesize\bfseries] at (0,-0.15) {API REST};
+    \node[svcgris, minimum width=14.6cm, font=\footnotesize] at (0,-1.0)
+      {Infrastructure : serveurs, réseau, stockage};
+  \end{scope}
+
+  % auteur et date
+  \node[align=center, font=\Large]
+    at ($(current page.south)+(0,6.4cm)$) {\textbf{\docauteur}};
+  \draw[insarouge, line width=1pt]
+    ($(current page.south)+(-3cm,5.3cm)$) -- ($(current page.south)+(3cm,5.3cm)$);
+  \node[text=insagris, align=center, font=\large]
+    at ($(current page.south)+(0,4.4cm)$) {\docdate};
+\end{tikzpicture}
+\end{titlepage}
+\setcounter{page}{2}
