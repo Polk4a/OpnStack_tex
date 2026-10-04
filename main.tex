@@ -10,9 +10,11 @@
 %    est celui des \include plus bas : pour réordonner, déplacer une ligne.
 %  - Le cours est découpé en cinq parties (\part), qui reprennent le fil de lecture :
 %    I Fondations, II Le socle IaaS, III Exploiter le cloud, IV Services de plateforme,
-%    V Mettre en œuvre. Chaque \part est écrite en tête du premier chapitre de la partie
+%    V Mettre en œuvre, auxquelles s'ajoute après la conclusion la partie VI Auto-évaluation (QCM.tex :
+%    120 questions et leurs corrigés). Chaque \part de cours est écrite en tête du premier chapitre de la partie
 %    (chap_presentation, chap_nova, chap_horizon, chap_ironic, chap_deploiement), juste avant
-%    son \section : si l'on déplace ce chapitre, déplacer aussi la \part.
+%    son \section : si l'on déplace ce chapitre, déplacer aussi la \part. La partie VI est écrite
+%    en tête de QCM.tex.
 %  - Nouveau document : modifier le bloc « Informations du document »,
 %    ajouter ou retirer des \include, décommenter les sections utiles
 %    (résumés, table des illustrations, annexes).
@@ -396,6 +398,9 @@
 
 %%%%% Conclusion (section non numérotée, ajoutée au sommaire) %%%%%
 \include{conclusion}
+
+%%%%% Partie VI : auto-évaluation (QCM et corrigés, imprimables) ; retirer cette ligne pour supprimer la partie %%%%%
+\include{QCM}
 
 %%%%% Bibliographie %%%%%
 \clearpage

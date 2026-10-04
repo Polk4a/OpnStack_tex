@@ -1,0 +1,1293 @@
+% =====================================================================
+%  QCM.tex : partie « Auto-évaluation » (questionnaires à choix multiples et corrigés).
+%  Fichier importé par main.tex avec \include{QCM}, après la conclusion.
+%  Il ne contient ni préambule ni \begin{document}.
+%
+%  Principe : chaque question est écrite UNE seule fois, avec \qcmq. La macro imprime la question
+%  (avec ses cases à cocher, pour un usage sur papier) et range en mémoire sa correction ; les
+%  corrigés sont imprimés plus loin, dans la section « QCM : corrigés », par \qcmprintcorr.
+%  Les numéros de question (Q 3.4 = chapitre 3, question 4) suivent donc l'ordre des chapitres.
+%
+%  Structure d'un chapitre (8 questions, 17 points) :
+%    questions 1 à 3  : niveau facile         (1 point chacune, une seule bonne réponse)
+%    questions 4 et 5 : niveau intermédiaire  (2 points chacune, une seule bonne réponse)
+%    questions 6 et 7 : niveau avancé         (3 points chacune, une seule bonne réponse)
+%    question 8       : niveau maîtrise       (4 points, plusieurs bonnes réponses : il faut cocher
+%                                              exactement les bonnes propositions)
+%
+%  Écrire un chapitre :
+%    \qcmchap{chap:nova}{Nova : le service de calcul}
+%    \qcmq{niveau}{énoncé}{A}{B}{C}{D}{réponse(s)}{explication}{renvois}
+%  où niveau vaut f, i, a ou m ; réponse(s) : une lettre (« B ») ou plusieurs (« A, C ») ;
+%  renvois : \qr{label-de-section}, \qrc{label-de-chapitre}, \qrf{label-de-figure}, \qrt{label-de-tableau},
+%  séparés par des virgules ou « et ». Dans les arguments : pas de \verb ni de lstinline ; écrire \_ pour
+%  un tiret bas, \% pour un pourcentage.
+% =====================================================================
+
+\makeatletter
+
+% --- cases, niveaux, barème ------------------------------------------------------------
+\newcounter{qcmq}
+\newcommand{\qcm@chaplist}{}
+\newcommand{\qcm@rows}{}
+\newcommand{\qcm@bilrows}{}
+\newcommand{\qcmcase}{\raisebox{-0.3ex}{\Large$\square$}}
+\def\qcm@lvname@f{Facile}
+\def\qcm@lvname@i{Intermédiaire}
+\def\qcm@lvname@a{Avancé}
+\def\qcm@lvname@m{Maîtrise}
+\def\qcm@pts@f{1}\def\qcm@pts@i{2}\def\qcm@pts@a{3}\def\qcm@pts@m{4}
+\def\qcm@mode@f{une seule réponse}\def\qcm@mode@i{une seule réponse}
+\def\qcm@mode@a{une seule réponse}\def\qcm@mode@m{plusieurs réponses possibles}
+\def\qcm@answ@f{Réponse}\def\qcm@answ@i{Réponse}\def\qcm@answ@a{Réponse}\def\qcm@answ@m{Réponses}
+
+% --- renvois vers le cours -------------------------------------------------------------
+\newcommand{\qr}[1]{section~\ref{#1} (p.~\pageref{#1})}
+\newcommand{\qrc}[1]{chapitre~\ref{#1} (p.~\pageref{#1})}
+\newcommand{\qrf}[1]{figure~\ref{#1} (p.~\pageref{#1})}
+\newcommand{\qrt}[1]{tableau~\ref{#1} (p.~\pageref{#1})}
+
+% --- liste des propositions ------------------------------------------------------------
+\newenvironment{qcmopts}{%
+  \begin{list}{}{\setlength{\leftmargin}{3.3em}\setlength{\labelwidth}{3.0em}\setlength{\labelsep}{0.3em}%
+    \setlength{\itemsep}{1.5pt}\setlength{\topsep}{2pt}\setlength{\parsep}{0pt}\setlength{\partopsep}{0pt}}}%
+  {\end{list}}
+\newcommand{\qcmitem}[2]{\item[\qcmcase\ \textbf{#1}] #2}
+
+% --- début du questionnaire d'un chapitre ---------------------------------------------------
+%     #1 : label du chapitre (chap:nova)   #2 : titre du chapitre
+\newcommand{\qcm@need}[1]{\par\dimen@=\pagegoal \advance\dimen@ by -\pagetotal
+  \ifdim\dimen@<#1\relax\newpage\fi}
+\newcommand{\qcmchap}[2]{%
+  \ifx\qcm@chaplist\@empty\clearpage\else\par\vspace{2.2ex plus 1ex}\qcm@need{14\baselineskip}\fi
+  \def\qcm@chap{#1}\edef\qcm@key{\detokenize{#1}}\setcounter{qcmq}{0}%
+  \g@addto@macro\qcm@chaplist{#1,}%
+  \expandafter\gdef\csname qcm@t@\qcm@key\endcsname{#2}%
+  \expandafter\gdef\csname qcm@row@\qcm@key\endcsname{\ref{#1}}%
+  \expandafter\g@addto@macro\expandafter\qcm@rows\expandafter{\csname qcm@row@\qcm@key\endcsname\\}%
+  \g@addto@macro\qcm@bilrows{\ref{#1} & \nameref{#1} & \makebox[1.5cm]{\dotfill}\,/\,17 &
+    \qcmcase\,{\footnotesize à revoir}\quad\qcmcase\,{\footnotesize acquis}\quad\qcmcase\,{\footnotesize maîtrisé} \\}%
+  \subsection*{Chapitre~\ref{#1} : #2}%
+  \noindent{\footnotesize\color{insagris}Barème : $3\times1+2\times2+2\times3+1\times4=17$ points.}\hfill
+  {\small Score : \makebox[2.2cm]{\dotfill}\,/\,17}\par\vspace{0.6ex}}
+
+% --- une question ---------------------------------------------------------------------------
+%     #1 niveau (f, i, a, m)  #2 énoncé  #3-#6 propositions A à D  #7 réponse(s)
+%     #8 explication  #9 renvois au cours
+\newcommand{\qcmq}[9]{%
+  \stepcounter{qcmq}%
+  \edef\qcm@n{\arabic{qcmq}}%
+  \expandafter\gdef\csname qcm@c@\qcm@key-\qcm@n\endcsname{\qcm@corrbody{#1}{#7}{#8}{#9}}%
+  \expandafter\g@addto@macro\csname qcm@row@\qcm@key\endcsname{ & #7}%
+  \par\vspace{1.9ex plus 0.5ex}\noindent
+  \begin{minipage}{\linewidth}
+  \noindent{\bfseries\color{insarouge}Q\,\ref{\qcm@chap}.\qcm@n}\enspace
+  {\footnotesize\color{insagris}\csname qcm@lvname@#1\endcsname\ \textperiodcentered\ %
+   \csname qcm@pts@#1\endcsname~pt\ \textperiodcentered\ \csname qcm@mode@#1\endcsname}\par\nobreak\smallskip
+  \noindent #2\par\nobreak
+  \begin{qcmopts}
+    \qcmitem{A}{#3}
+    \qcmitem{B}{#4}
+    \qcmitem{C}{#5}
+    \qcmitem{D}{#6}
+  \end{qcmopts}
+  \end{minipage}\par}
+
+% --- impression d'une correction ---------------------------------------------------------------
+%     #1 niveau  #2 réponse(s)  #3 explication  #4 renvois
+\newcommand{\qcm@corrbody}[4]{%
+  \begingroup\emergencystretch=3em
+  \par\noindent\hangindent=3.3em\hangafter=1
+  \makebox[3.3em][l]{\bfseries\color{insarouge}Q\,\ref{\qcm@curchap}.\qcm@curn}%
+  {\bfseries\csname qcm@answ@#1\endcsname~: #2.}\ #3\ \emph{Voir}~#4.\par\endgroup\addvspace{0.7ex}}
+
+% corrigé d'un chapitre : #1 = label du chapitre
+%   (pas de \@for ici : avec babel français, « : » est actif et « := » ne serait pas reconnu)
+\newcounter{qcmi}
+\newcommand{\qcmprintcorr}[1]{%
+  \edef\qcm@curkey{\detokenize{#1}}%
+  \subsection*{Chapitre~\ref{#1} : \csname qcm@t@\qcm@curkey\endcsname}%
+  \def\qcm@curchap{#1}%
+  \setcounter{qcmi}{1}%
+  \@whilenum\value{qcmi}<9\do{%
+    \edef\qcm@curn{\arabic{qcmi}}%
+    \csname qcm@c@\qcm@curkey-\qcm@curn\endcsname
+    \stepcounter{qcmi}}}
+
+% corrigés de tous les chapitres, dans l'ordre où ils ont été posés
+\def\qcm@endmark{END}
+\def\qcm@pall#1,{%
+  \def\qcm@tmp{#1}%
+  \ifx\qcm@tmp\qcm@endmark\else
+    \qcmprintcorr{#1}%
+    \expandafter\qcm@pall
+  \fi}
+\newcommand{\qcmprintallcorr}{\expandafter\qcm@pall\qcm@chaplist END,}
+
+% tableau récapitulatif des réponses
+\newcommand{\qcmanswertable}{%
+  \begin{center}\small\renewcommand{\arraystretch}{1.25}
+  \begin{tabular}{@{}c*{8}{>{\centering\arraybackslash}p{1.25cm}}@{}}
+  \toprule
+  & \multicolumn{3}{c}{\scriptsize facile (1 pt)} & \multicolumn{2}{c}{\scriptsize intermédiaire (2 pt)}
+  & \multicolumn{2}{c}{\scriptsize avancé (3 pt)} & {\scriptsize maîtrise (4 pt)} \\
+  \cmidrule(lr){2-4}\cmidrule(lr){5-6}\cmidrule(lr){7-8}\cmidrule(l){9-9}
+  \textbf{Chap.} & \textbf{1} & \textbf{2} & \textbf{3} & \textbf{4} & \textbf{5} & \textbf{6} & \textbf{7} & \textbf{8} \\
+  \midrule
+  \qcm@rows
+  \bottomrule
+  \end{tabular}
+  \end{center}}
+
+
+% bilan : une ligne par chapitre (rangée par \qcmchap), à remplir après la correction
+\newcommand{\qcmbilan}{%
+  \begin{center}\small\renewcommand{\arraystretch}{1.45}
+  \begin{tabular}{@{}r>{\raggedright\arraybackslash}p{6.7cm}rl@{}}
+  \toprule
+  \textbf{Chap.} & \textbf{Chapitre} & \textbf{Score} & \textbf{Bilan} \\
+  \midrule
+  \qcm@bilrows
+  \midrule
+  & \textbf{Total} & \makebox[1.5cm]{\dotfill}\,/\,255 & \\
+  \bottomrule
+  \end{tabular}
+  \end{center}}
+
+\makeatother
+
+% =====================================================================
+%  Partie VI : en-tête de la partie et mode d'emploi
+% =====================================================================
+\part{Auto-évaluation}\label{part:qcm}
+\partdesc{Huit questions à choix multiples par chapitre, de la compréhension à la maîtrise, à faire sur papier ; les corrigés expliquent chaque réponse et renvoient au cours.}
+
+\phantomsection
+\section*{QCM : questionnaires}\label{qcm:debut}
+\addcontentsline{toc}{section}{QCM : questionnaires}
+
+Cette partie permet de vérifier, chapitre par chapitre, ce que l'on a retenu. Elle contient 120 questions, huit par chapitre du
+chapitre~\ref{chap:presentation} au chapitre~\ref{chap:deploiement}, et leurs corrigés. Elle est faite pour être imprimée : chaque
+question a ses cases à cocher, les questions d'un chapitre tiennent sur une page ou deux, et les corrigés sont rassemblés plus loin
+(page~\pageref{qcm:corr}), pour ne pas les avoir sous les yeux en répondant.
+
+\paragraph{Les huit questions d'un chapitre.} Elles vont du plus simple au plus fin ; chacune propose quatre réponses, A à D.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}l>{\centering\arraybackslash}p{2.0cm}>{\centering\arraybackslash}p{1.2cm}>{\raggedright\arraybackslash}p{3.3cm}>{\raggedright\arraybackslash}p{5.9cm}@{}}
+\toprule
+\textbf{Niveau} & \textbf{Questions} & \textbf{Points} & \textbf{Réponses exactes} & \textbf{Ce qu'on vérifie} \\
+\midrule
+Facile         & 1 à 3 & 1 & une seule        & définitions, rôle d'un service, vocabulaire \\
+Intermédiaire  & 4 et 5 & 2 & une seule       & relier des notions, distinguer des objets voisins, ordre des étapes \\
+Avancé         & 6 et 7 & 3 & une seule       & raisonner sur un scénario : panne, choix de conception, cause et effet \\
+Maîtrise       & 8 & 4 & deux ou trois        & juger chaque affirmation, vraie ou fausse \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Un chapitre vaut donc $3\times1+2\times2+2\times3+1\times4=17$ points, et l'ensemble du cours 255 points.
+
+\paragraph{Répondre.} Imprimer les pages du questionnaire (pages~\pageref{qcm:debut} à~\pageref{qcm:finq}), puis répondre au crayon,
+sans ouvrir le cours : on coche la case \qcmcase{} de la proposition choisie, et l'on peut gommer pour corriger.
+Aux questions 1 à 7, une seule proposition est exacte ; cocher plusieurs cases revient à ne pas répondre. À la question 8,
+plusieurs propositions sont exactes : les quatre points ne sont accordés que si l'on coche toutes les propositions exactes, et elles
+seules. Une question laissée sans réponse vaut zéro, une mauvaise réponse aussi : il n'y a pas de point négatif, donc autant répondre
+en cas de doute.
+
+\paragraph{Corriger.} Les corrigés (section « QCM : corrigés », page~\pageref{qcm:corr}) commencent par un tableau des bonnes
+réponses, chapitre par chapitre. Ils donnent ensuite, pour chaque question, la bonne réponse, une explication et le passage du cours
+à relire, avec son numéro de section et sa page. Les questions sont numérotées Q\,$c$.$n$ (Q\,3.4 est la quatrième question du chapitre~3), pour
+ne pas les confondre avec les numéros de section du cours. La dernière page du questionnaire sert de bilan.
+
+\paragraph{Interpréter un score.} Sur 17 points : de 0 à 8, le chapitre est à revoir, en commençant par sa première section et son
+encadré « À retenir » ; de 9 à 13, il est acquis, et il suffit de relire les sections renvoyées par les questions manquées ; de 14 à 17,
+il est maîtrisé. Les questions de niveau avancé et de maîtrise font la différence : un chapitre à 9 points sans aucune d'elles reste à consolider.
+
+\qcmchap{chap:presentation}{Présentation générale d'OpenStack}
+
+\qcmq{f}{Dans le modèle de service IaaS, auquel se rattache OpenStack, que prend en charge le fournisseur ?}
+  {L'application complète, que l'utilisateur se contente d'utiliser}
+  {Le système d'exploitation et l'environnement d'exécution, l'utilisateur ne déployant que son application et ses données}
+  {L'infrastructure (machines virtuelles, réseaux, volumes) ; l'utilisateur installe et administre le système et ses applications}
+  {Seulement le matériel nu : l'utilisateur monte lui-même sa virtualisation, son réseau et son stockage}{C}
+  {En IaaS, le fournisseur gère les couches basses (serveurs, stockage, réseau, virtualisation), que OpenStack automatise ; l'utilisateur administre le système, ses données et ses applications. Le fournisseur qui gère aussi le système et l'exécution relève du PaaS, et celui qui livre l'application complète du SaaS.}
+  {\qr{sec:pres-modeles} et \qrf{fig:pres-modeles}}
+
+\qcmq{f}{Quel est le rapport entre OpenStack et l'hyperviseur KVM ?}
+  {OpenStack pilote KVM, qui exécute les machines virtuelles sur chaque serveur : les deux sont complémentaires}
+  {OpenStack remplace KVM dans les grands déploiements, KVM restant réservé aux serveurs isolés}
+  {KVM est un service d'OpenStack, chargé de choisir le serveur où placer chaque machine virtuelle}
+  {OpenStack est un hyperviseur de type 2, alors que KVM est un hyperviseur de type 1 : on choisit l'un ou l'autre}{A}
+  {OpenStack décide, coordonne et expose une API ; Nova demande à l'hyperviseur de chaque serveur, en général KVM/QEMU par libvirt, de créer les machines. KVM exécute une machine sur un serveur, OpenStack en gère des milliers : ils sont complémentaires, pas concurrents.}
+  {\qr{sec:pres-openstack} et \qrt{tab:pres-confie}}
+
+\qcmq{f}{Parmi les cinq caractéristiques du cloud selon le NIST, laquelle OpenStack met-il en œuvre grâce aux projets (chaque projet ne voit que ses ressources) et aux quotas ?}
+  {L'élasticité rapide}
+  {Le service mesuré}
+  {Le libre-service à la demande}
+  {La mutualisation des ressources}{D}
+  {Le chapitre associe la mutualisation des ressources (multitenance) aux projets et aux quotas. Le libre-service passe par les API et le tableau de bord, l'élasticité par la création et la suppression de ressources en quelques secondes ; la mesure de la consommation relève de services de télémétrie que le cours ne traite pas.}
+  {\qr{sec:pres-cloud}}
+
+\qcmq{i}{Dans une commande \texttt{openstack server create}, quel service connaît chacune des ressources désignées par \texttt{--flavor}, \texttt{--image} et \texttt{--network} ?}
+  {Gabarit : Placement ; image : Glance ; réseau : Neutron}
+  {Gabarit : Nova ; image : Glance ; réseau : Neutron}
+  {Gabarit : Nova ; image : Cinder ; réseau : Neutron}
+  {Gabarit : Nova ; image : Glance ; réseau : Nova}{B}
+  {Chaque option désigne une ressource gérée par un autre service : le gabarit (flavor) est connu de Nova, l'image de Glance et le réseau de Neutron. Cinder n'intervient que si un volume est demandé, et Placement ne sert qu'à trouver l'hôte.}
+  {\qr{sec:pres-scenario} et \qrf{fig:pres-scenario}}
+
+\qcmq{i}{Dans le plan commun à tous les services OpenStack, comment l'API REST d'un service confie-t-elle le travail à ses processus internes (ordonnanceur, agents) ?}
+  {Elle appelle leurs API REST de façon synchrone, pendant que le client attend la réponse}
+  {Elle écrit la demande dans la base de données d'un autre service, que celui-ci surveille}
+  {Elle dépose un message sur un bus de messages asynchrone, en général RabbitMQ}
+  {Elle passe par Keystone, qui relaie les demandes entre les composants du service}{C}
+  {Chaque service suit le même plan : l'API REST reçoit la requête, délègue le travail aux processus internes par un bus de messages asynchrone (RabbitMQ en général), et l'état est conservé dans la base propre du service. Les services ne se parlent jamais par la base d'un autre ; Keystone ne fait que valider les tokens.}
+  {\qr{sec:pres-architecture} et \qrf{fig:pres-service}}
+
+\qcmq{a}{Dans le déploiement multi-nœuds du chapitre, l'interface de stockage (eth2) d'un nœud de calcul tombe en panne ; ses interfaces de gestion et d'instances restent actives. Quelle conséquence est attendue ?}
+  {Les instances de ce nœud perdent l'accès à leurs volumes Cinder, mais le nœud reste administrable par le réseau de gestion}
+  {Les instances de ce nœud ne communiquent plus avec celles des autres nœuds, mais conservent leurs volumes}
+  {Le nœud n'est plus joignable par les services et disparaît de l'administration, alors que ses instances gardent leurs volumes}
+  {Les instances de ce nœud perdent leurs adresses flottantes, car l'accès externe passe par le réseau de stockage}{A}
+  {Le réseau de stockage ne transporte que l'accès des nœuds de calcul aux volumes de Cinder : sa perte coupe les instances de leurs volumes. L'administration (API, bus de messages) passe par le réseau de gestion, les tunnels des instances par un autre réseau, et l'accès externe par le seul nœud réseau.}
+  {\qrt{tab:pres-reseaux} et \qrf{fig:pres-multi}}
+
+\qcmq{a}{Une DSI veut offrir à de nombreuses équipes un libre-service de machines virtuelles, avec des réseaux virtuels propres à chaque projet, sur des centaines de serveurs, puis y faire tourner des applications en conteneurs. Quelle architecture est cohérente avec le chapitre ?}
+  {Kubernetes seul : orchestrateur de conteneurs, il suffit à fournir le libre-service de machines et de réseaux par projet}
+  {Proxmox VE, dont l'interface unique vise le datacenter entier et le libre-service multi-projets}
+  {KVM seul sur chaque serveur : l'hyperviseur assure le placement et les droits d'accès entre projets}
+  {OpenStack fournit machines, réseaux et volumes ; Kubernetes est déployé sur ces machines virtuelles}{D}
+  {Les outils opèrent à des niveaux différents : un cloud privé en libre-service, multi-projets et à l'échelle du datacenter relève d'OpenStack, alors que Proxmox VE vise quelques serveurs et que KVM n'est qu'un hyperviseur. Kubernetes, orchestrateur de conteneurs, ne fournit pas ce libre-service de machines et de réseaux : il se place au-dessus et tourne sur des machines virtuelles, avec le réseau et les volumes de Neutron et de Cinder.}
+  {\qr{sec:pres-comparaison} et \qrf{fig:pres-pile}}
+
+\qcmq{m}{Parmi les affirmations suivantes sur l'architecture et le fonctionnement d'OpenStack, lesquelles sont exactes ?}
+  {Heat et Octavia appartiennent à la même famille que Nova, Placement et Neutron : le socle IaaS, qui fournit calcul, réseau, images et stockage.}
+  {Keystone est le seul service que tous les autres consultent, et Horizon n'est qu'un client des mêmes API REST que la ligne de commande.}
+  {Le déploiement minimal du guide d'installation comprend Keystone, Glance, Placement, Nova et Neutron ; Horizon et Cinder sont conseillés en complément.}
+  {Une instance \texttt{ACTIVE} est joignable en SSH depuis l'extérieur dès sa création, car le groupe de sécurité par défaut autorise tout le trafic entrant.}{B, C}
+  {Heat et Octavia relèvent de la famille « Exploiter le cloud » ; le socle IaaS regroupe Nova, Placement, Glance, Neutron, Cinder et Swift. Keystone est le seul service que tous consultent, et Horizon appelle les mêmes API REST que la ligne de commande. Le déploiement minimal retenu comprend Keystone, Glance, Placement, Nova et Neutron. Enfin, par défaut tout le trafic entrant est refusé : il faut ouvrir le port dans le groupe de sécurité et associer une adresse flottante.}
+  {\qr{sec:pres-architecture}, \qr{sec:pres-openstack} et \qr{sec:pres-scenario}}
+
+\qcmchap{chap:keystone}{Keystone : le service d'identité}
+
+\qcmq{f}{Une fois son token obtenu, dans quel en-tête HTTP le client le présente-t-il à chaque requête vers un service OpenStack ?}
+  {\texttt{X-Service-Token}}
+  {\texttt{X-Auth-Token}}
+  {\texttt{X-Subject-Token}}
+  {\texttt{X-Identity-Status}}{B}
+  {Le client place son token dans \texttt{X-Auth-Token} à chaque requête. \texttt{X-Subject-Token} est l'en-tête de la réponse de Keystone qui le livre, \texttt{X-Service-Token} porte le token du service qui relaie la requête, et \texttt{X-Identity-Status} est ajouté par le middleware après la validation.}
+  {\qr{sec:ks-tokens} et \qr{sec:ks-obtenir}}
+
+\qcmq{f}{Dans Keystone, que désigne un domaine ?}
+  {Un ensemble de droits que les services interprètent pour décider des accès, par exemple \texttt{admin} ou \texttt{member}}
+  {La division du déploiement qui porte un service et ses endpoints, par exemple \texttt{RegionOne}}
+  {Le lien entre un acteur (utilisateur ou groupe), un rôle et une cible (projet, domaine ou système)}
+  {Le conteneur de plus haut niveau : les projets, utilisateurs et groupes d'une même entité administrative}{D}
+  {Le domaine est le conteneur de plus haut niveau de Keystone : il contient les utilisateurs, les groupes et les projets d'une même entité administrative et les isole des autres entités. Les trois autres définitions sont celles du rôle, de la région et de l'affectation de rôle.}
+  {\qr{sec:ks-concepts} et \qrf{fig:ks-modele}}
+
+\qcmq{f}{Qu'est-ce que le catalogue de services de Keystone ?}
+  {La liste des services du déploiement et des endpoints (adresses) de chacun, renvoyée avec le token}
+  {L'ensemble des images de machines que les utilisateurs d'un projet peuvent démarrer à la demande, avec leurs formats}
+  {La liste des rôles par défaut du déploiement et des droits que chacun accorde sur un projet}
+  {Le dépôt des fichiers de clés qui servent à chiffrer et à déchiffrer les tokens Fernet}{A}
+  {Un client ne connaît que l'adresse de Keystone : le catalogue, renvoyé avec le token, lui donne les services du déploiement et leurs endpoints, ce qui permet de déplacer un service sans toucher aux clients. Les images relèvent de Glance, les rôles des affectations, et les clés du fournisseur de tokens.}
+  {\qr{sec:ks-catalogue}}
+
+\qcmq{i}{Quelle différence existe-t-il entre les fournisseurs de tokens \texttt{fernet} et \texttt{jws} ?}
+  {Les tokens \texttt{jws} sont enregistrés en base, ce qui permet de les supprimer à tout moment ; les tokens Fernet ne le sont pas}
+  {Fernet signe le token avec une paire de clés asymétriques ; \texttt{jws} le chiffre avec une clé symétrique partagée entre les nœuds}
+  {Fernet chiffre avec une clé symétrique que seul Keystone détient ; \texttt{jws} signe avec une paire asymétrique et son contenu reste lisible}
+  {Fernet est réservé à un seul nœud Keystone ; \texttt{jws} est le seul format utilisable derrière un répartiteur de charge}{C}
+  {Un token Fernet est chiffré et authentifié par une clé symétrique : seul Keystone peut le lire. Un token jws est signé par une paire de clés asymétriques (ES256) : tout porteur peut lire son contenu, et seule la clé privée sert à signer. Dans les deux cas le token n'est pas enregistré, ce qui rend Keystone simple à répliquer.}
+  {\qr{sec:ks-formats}}
+
+\qcmq{i}{Un utilisateur a reçu uniquement le rôle \texttt{member} sur un projet. Un service a écrit une règle d'accès pour le rôle \texttt{reader}. Qu'en est-il de cet utilisateur sur ce projet ?}
+  {La règle s'applique à lui : \texttt{member} implique \texttt{reader}, donc \texttt{reader} figure parmi ses rôles effectifs sans affectation directe}
+  {La règle ne s'applique pas : seuls les rôles affectés directement comptent, donc \texttt{reader} doit lui être affecté explicitement}
+  {La règle ne s'applique pas : parmi les rôles par défaut, seul \texttt{admin} implique d'autres rôles, \texttt{member} n'en implique aucun}
+  {La règle s'applique seulement s'il détient aussi le rôle \texttt{service}, qui relie entre eux les rôles de la hiérarchie}{A}
+  {Quatre rôles par défaut forment une hiérarchie : \texttt{admin} implique \texttt{manager}, qui implique \texttt{member}, qui implique \texttt{reader}. Une règle écrite pour \texttt{reader} s'applique donc aussi à \texttt{member}, et \texttt{reader} figure dans le token sans avoir été affecté. Le rôle \texttt{service} est autonome et n'entre pas dans cette hiérarchie.}
+  {\qr{sec:ks-rbac} et \qrf{fig:ks-roles}}
+
+\qcmq{a}{À 10 h 00, un administrateur retire à Alice le rôle \texttt{member} sur le projet \texttt{prod}. À 10 h 02, Nova accepte encore une création de serveur avec le token d'Alice, non expiré. Quelle explication correspond au chapitre ?}
+  {Keystone ne crée pas d'événement de révocation quand on retire un rôle : seule l'expiration du token met fin à ses droits}
+  {Un token Fernet embarque ses rôles chiffrés et Keystone ne les relit pas à la validation, donc il garde ses droits jusqu'à son expiration}
+  {La rotation des clés Fernet n'a pas encore eu lieu, de sorte que l'ancienne clé primaire continue de valider le token}
+  {Nova a mis en cache le résultat de la validation du token ; la révocation n'agit qu'à l'expiration de ce cache (300 s par défaut)}{D}
+  {Le retrait d'un rôle crée un événement de révocation, et Keystone reconstruit les rôles à chaque validation. Mais le middleware du service met le résultat de la validation en cache (300 s par défaut) : tant que ce cache n'a pas expiré, Nova accepte le token. Une révocation n'est donc pas immédiate partout.}
+  {\qr{sec:ks-revocation} et \qr{sec:ks-middleware}}
+
+\qcmq{a}{Trois nœuds Keystone sont placés derrière un répartiteur de charge. Après plusieurs rotations des clés Fernet faites sur un seul nœud, des tokens valides sont refusés (401) dès que leur validation tombe sur un autre nœud. Quelle est la correction ?}
+  {Resynchroniser les horloges des trois nœuds avec NTP, car les tokens y paraissent déjà expirés aux yeux de Keystone}
+  {Copier le dépôt de clés du nœud qui a tourné sur les deux autres, pour que tous détiennent les mêmes clés}
+  {Enregistrer chaque token dans la base partagée, afin que n'importe quel nœud puisse le retrouver et le valider}
+  {Allonger la durée de vie des tokens, pour qu'ils survivent plus longtemps à la rotation des clés}{B}
+  {Avec Fernet, un token ne se valide qu'en le déchiffrant avec une clé du dépôt : tous les nœuds doivent détenir le même dépôt. On fait donc la rotation sur un seul nœud, puis on copie le dépôt sur les autres ; la clé en attente ne couvre que la première rotation. Un décalage d'horloge produit des tokens « déjà expirés », et un token Fernet n'est jamais enregistré en base.}
+  {\qr{sec:ks-formats} et \qrt{tab:ks-pannes}}
+
+\qcmq{m}{Parmi les affirmations suivantes sur les sources d'identité et les mécanismes avancés de Keystone, lesquelles sont exactes ?}
+  {Avec un annuaire LDAP, Keystone ne lit que les utilisateurs et les groupes ; projets, rôles et affectations restent dans sa base SQL.}
+  {Avec les limites unifiées, Keystone applique lui-même les plafonds et refuse la création de ressources au-delà de la limite d'un projet.}
+  {Une application credential délègue à une application au plus les rôles de l'utilisateur sur le projet, jamais davantage.}
+  {Avec la fédération, Keystone agit comme fournisseur de services : un mapping convertit les attributs de l'assertion en groupes locaux, sans mot de passe côté Keystone.}{A, C, D}
+  {Avec LDAP, seule l'identité (utilisateurs et groupes) vient de l'annuaire, en lecture seule. Une application credential reçoit un sous-ensemble des rôles de l'utilisateur, jamais plus. En fédération, Keystone, fournisseur de services, applique un mapping et ne voit pas le mot de passe. Pour les limites unifiées, Keystone ne fait que les stocker : chaque service les applique.}
+  {\qr{sec:ks-backends}, \qr{sec:ks-avance} et \qr{sec:ks-federation}}
+
+\qcmchap{chap:nova}{Nova : le service de calcul}
+
+\qcmq{f}{Quelle phrase décrit correctement le rôle de Nova dans OpenStack ?}
+  {Il gère le cycle de vie des instances sans les exécuter : il pilote l'hyperviseur de chaque nœud de calcul}
+  {Il exécute lui-même les machines virtuelles, grâce à un hyperviseur intégré à ses propres composants sur le contrôleur}
+  {Il conserve le catalogue des images de machines à partir desquelles les instances démarrent}
+  {Il décrit les réseaux virtuels, les routeurs et les adresses flottantes que reçoivent les instances}{A}
+  {Nova gère le cycle de vie complet des instances (création, arrêt, redimensionnement, migration, suppression), mais n'exécute aucune machine lui-même : il pilote l'hyperviseur de chaque nœud de calcul par libvirt. Les images relèvent de Glance et les réseaux de Neutron.}
+  {\qr{sec:nova-role} et \qrf{fig:nova-env}}
+
+\qcmq{f}{Qu'appelle-t-on un gabarit (\emph{flavor}) dans Nova ?}
+  {Un modèle de disque, fourni par Glance, à partir duquel l'instance démarre, avec son système installé}
+  {Un groupe de nœuds de calcul défini par l'administrateur, avec ses métadonnées}
+  {Une clé publique SSH, injectée dans l'instance au démarrage pour permettre la connexion}
+  {La taille d'une instance : vCPU, mémoire, disque racine, et en option disque éphémère et swap}{D}
+  {Un gabarit fixe la taille de l'instance : vCPU, mémoire et disque racine, avec en option un disque éphémère et du swap. Le modèle de disque est l'image (Glance), le groupe de nœuds est un agrégat, et la clé SSH est une paire de clés.}
+  {\qr{sec:nova-concepts} et \qrt{tab:nova-objets}}
+
+\qcmq{f}{À quel moment l'API de Nova répond-elle à une demande de création d'instance ?}
+  {Seulement quand l'instance est \texttt{ACTIVE}, une fois la machine démarrée par libvirt sur le nœud de calcul}
+  {Tout de suite (\texttt{202 Accepted}) : l'instance reste en \texttt{BUILD} pendant que la construction continue}
+  {Après le choix de l'hôte par l'ordonnanceur, mais avant que le nœud de calcul ne soit sollicité}
+  {Après la réservation dans Placement, dès que l'image a été téléchargée depuis Glance}{B}
+  {La construction est asynchrone : l'API valide la requête, les quotas et le token, puis rend la main avec 202 Accepted avant même que la machine existe. L'instance reste à l'état BUILD jusqu'à ce que le nœud de calcul ait fini, puis devient ACTIVE ou ERROR.}
+  {\qr{sec:nova-creation} et \qrf{fig:nova-seq}}
+
+\qcmq{i}{Quelle phrase distingue correctement \texttt{nova-conductor} de \texttt{nova-scheduler} ?}
+  {Le conductor choisit l'hôte avec ses filtres et ses pondérateurs ; le scheduler sert d'intermédiaire entre les nœuds de calcul et la base}
+  {Le scheduler s'exécute dans chaque cellule avec \texttt{nova-compute} ; le conductor n'existe qu'au niveau API, jamais dans une cellule}
+  {Le conductor coordonne les opérations multi-composants et sert d'intermédiaire avec la base ; le scheduler choisit l'hôte via Placement}
+  {Le conductor tient l'inventaire des ressources de chaque hôte ; le scheduler écrit en base pour le compte de \texttt{nova-compute}}{C}
+  {Le conductor coordonne les opérations qui engagent plusieurs composants (construction, redimensionnement) et sert d'intermédiaire avec la base, car les nœuds de calcul n'y accèdent pas. Le scheduler choisit l'hôte en interrogeant Placement, qui seul tient l'inventaire. Le conductor existe au niveau API (super conductor) et dans chaque cellule ; le scheduler reste au niveau API.}
+  {\qr{sec:nova-archi} et \qrt{tab:nova-composants}}
+
+\qcmq{i}{Un administrateur doit vider un hôte avant une maintenance, sans arrêter les instances qui y tournent. Quelle opération convient d'après le chapitre ?}
+  {Le redimensionnement, qui change de gabarit puis demande de confirmer ou d'annuler}
+  {La migration à froid, qui déplace l'instance arrêtée puis la redémarre}
+  {L'évacuation, qui recrée l'instance sur un autre hôte quand le sien est en panne}
+  {La migration à chaud, qui déplace l'instance en marche avec une interruption très courte}{D}
+  {La migration à chaud déplace une instance en marche, avec une interruption très courte, par exemple pour vider un hôte avant maintenance ; elle demande un stockage partagé ou la copie du disque pendant le transfert. La migration à froid et le redimensionnement redémarrent l'instance, et l'évacuation sert quand l'hôte est déjà en panne.}
+  {\qr{sec:nova-cycle} et \qrt{tab:nova-deplacements}}
+
+\qcmq{a}{Sur un cloud où de nombreuses créations arrivent en même temps, l'ordonnanceur envoie toutes les demandes vers le même hôte, toujours le mieux classé, ce qui provoque des échecs de réservation. Quel réglage atténue ce problème ?}
+  {Donner à \texttt{host\_subset\_size} une valeur supérieure à 1, pour tirer l'hôte final au hasard parmi les mieux classés}
+  {Retirer \texttt{ComputeFilter} des filtres actifs, pour que davantage d'hôtes restent candidats au choix final}
+  {Augmenter \texttt{discover\_hosts\_in\_cells\_interval}, pour que les hôtes soient redécouverts moins souvent dans leur cellule}
+  {Utiliser un groupe de serveurs en affinité, qui regroupe les instances d'un même groupe sur un seul hôte}{A}
+  {Sans réglage, chaque demande retient l'hôte le mieux classé, donc des demandes simultanées visent le même. Avec une valeur supérieure à 1, l'ordonnanceur tire au hasard l'hôte final parmi les mieux classés, ce qui répartit les demandes. Retirer un filtre, espacer la découverte des hôtes ou regrouper les instances par affinité ne les répartit pas.}
+  {\qr{sec:nova-ordonnancement} et \qrf{fig:nova-sched}}
+
+\qcmq{a}{Une création d'instance passe de \texttt{BUILD} à \texttt{ERROR}. Le journal de l'ordonnanceur montre qu'un hôte a été retenu et réservé dans Placement. Où chercher d'abord la cause ?}
+  {Dans la sortie de \texttt{openstack allocation candidate list}, qui montrerait qu'aucun hôte n'a assez de ressources}
+  {Dans la découverte des hôtes : le nœud n'aurait pas été déclaré dans sa cellule avec \texttt{discover\_hosts}}
+  {Dans le champ \texttt{fault} de \texttt{openstack server show} et le journal de \texttt{nova-compute} : l'échec vient du nœud}
+  {Dans la validation du token : Keystone aurait refusé la requête de création avant que l'API de Nova ne l'accepte}{C}
+  {Un hôte retenu et réservé signifie que le placement a réussi : l'échec est survenu ensuite, sur le nœud de calcul, pendant la récupération de l'image, la création du port ou l'attachement du volume. Le champ fault et le journal de nova-compute le montrent. « No valid host » ou un nœud non découvert se seraient manifestés avant le choix de l'hôte.}
+  {\qrt{tab:nova-pannes} et \qr{sec:nova-creation}}
+
+\qcmq{m}{Parmi les affirmations suivantes sur Nova, lesquelles sont exactes ?}
+  {Le disque éphémère d'un gabarit survit à la suppression de l'instance, ce qui permet de le réutiliser pour une autre instance.}
+  {La cellule \texttt{cell0} ne comporte aucun nœud de calcul ; elle garde les instances que l'ordonnanceur n'a pas pu placer.}
+  {Toutes les propriétés supplémentaires d'un gabarit, dont \texttt{hw:cpu\_policy}, sont traduites en requête vers Placement.}
+  {Un nouveau nœud de calcul doit être découvert dans sa cellule avant que l'ordonnanceur puisse lui envoyer des instances.}{B, D}
+  {Le disque éphémère est perdu à la suppression de l'instance. La cellule \texttt{cell0} n'a aucun nœud de calcul et garde les instances non placées. Seules les propriétés de gabarit commençant par \texttt{resources:} et \texttt{trait:} deviennent une requête vers Placement ; \texttt{hw:cpu\_policy}, par exemple, s'adresse à l'hyperviseur. Un nouveau nœud doit enfin être découvert dans sa cellule.}
+  {\qr{sec:nova-archi}, \qr{sec:nova-concepts} et \qr{sec:nova-deploiement}}
+
+\qcmchap{chap:placement}{Placement : le suivi des ressources}
+
+\qcmq{f}{Quel est le rôle de Placement dans OpenStack ?}
+  {Choisir l'hôte final de chaque instance en appliquant des filtres et des pondérateurs aux nœuds de calcul}
+  {Tenir l'inventaire des ressources offertes par chaque fournisseur et enregistrer les allocations déjà accordées}
+  {Mesurer la consommation réelle des instances pour redistribuer la charge entre les nœuds de calcul}
+  {Créer les instances sur l'hyperviseur retenu et relier leurs disques et leurs cartes réseau}{B}
+  {Placement est un service d'inventaire : il sait ce que chaque fournisseur offre et ce qui est déjà alloué, puis répond aux requêtes de candidats. Il ne place rien lui-même : le choix final de l'hôte, par filtres et pondérateurs, appartient à l'ordonnanceur de Nova.}
+  {\qr{sec:pl-role} et \qrf{fig:pl-env}}
+
+\qcmq{f}{Dans le vocabulaire de Placement, qu'est-ce qu'une \emph{allocation} ?}
+  {La quantité totale d'une classe de ressources qu'offre un fournisseur}
+  {Une caractéristique qualitative d'un fournisseur, par exemple \texttt{STORAGE\_DISK\_SSD}}
+  {La quantité d'une classe de ressources prise sur un fournisseur par un consommateur, comme une instance}
+  {Un groupe de fournisseurs, utilisé pour décrire un stockage partagé ou une zone de disponibilité}{C}
+  {Une allocation est la quantité d'une classe de ressources prise sur un fournisseur par un consommateur, qui est l'instance pour Nova. Ce qu'un fournisseur offre s'appelle un inventaire, une caractéristique qualitative un trait, et un groupe de fournisseurs un agrégat.}
+  {\qr{sec:pl-modele} et \qrt{tab:pl-objets}}
+
+\qcmq{f}{Comment Placement calcule-t-il la capacité d'une classe de ressources sur un fournisseur ?}
+  {$(\texttt{total}-\texttt{reserved})\times\texttt{allocation\_ratio}$}
+  {$\texttt{total}\times\texttt{allocation\_ratio}-\texttt{reserved}$}
+  {$(\texttt{total}+\texttt{reserved})\times\texttt{allocation\_ratio}$}
+  {$(\texttt{total}-\texttt{reserved})/\texttt{allocation\_ratio}$}{A}
+  {On retire d'abord la part réservée à l'hôte (\texttt{reserved}), puis on applique le ratio d'allocation, qui règle la surallocation : c'est la capacité que les allocations ne doivent pas dépasser. Une allocation est donc acceptée tant que l'utilisé plus le demandé reste inférieur ou égal à cette capacité.}
+  {\qr{sec:pl-inventaire} et \qrf{fig:pl-modele}}
+
+\qcmq{i}{Un gabarit ne doit être placé que sur des hôtes dont le processeur offre AVX2, caractéristique publiée sous forme du trait \texttt{HW\_CPU\_X86\_AVX2}. Quelle propriété du gabarit traduit cette exigence dans la requête de candidats ?}
+  {\texttt{resources:HW\_CPU\_X86\_AVX2=1}}
+  {\texttt{resources:CUSTOM\_AVX2=1}}
+  {\texttt{trait:HW\_CPU\_X86\_AVX2=forbidden}}
+  {\texttt{trait:HW\_CPU\_X86\_AVX2=required}}{D}
+  {Un trait décrit ce qu'un fournisseur \emph{est} : on l'exige par une propriété \texttt{trait:T=required}, qui devient le paramètre \texttt{required} de la requête. Les propriétés \texttt{resources:} expriment des quantités d'une classe de ressources, et \texttt{forbidden} produirait l'effet inverse, c'est-à-dire l'interdiction du trait.}
+  {\qrt{tab:pl-requete} et \qr{sec:pl-traits}}
+
+\qcmq{i}{Plusieurs ordonnanceurs peuvent lire les mêmes candidats en même temps. Comment Placement détecte-t-il qu'une requête modifie un fournisseur ou un consommateur à partir d'une lecture périmée ?}
+  {Il verrouille la base \texttt{placement} au profit du premier ordonnanceur jusqu'à la fin de sa réservation}
+  {Chaque fournisseur et chaque consommateur porte un numéro de génération qui change à chaque modification}
+  {Il compare l'horodatage de l'inventaire publié par \texttt{nova-compute} à celui de la requête reçue}
+  {Il traite les réservations une par une, dans l'ordre d'arrivée, au moyen d'une file gérée par \texttt{nova-scheduler}}{B}
+  {Chaque fournisseur et chaque consommateur porte un numéro de génération qui change à chaque modification. Une requête fondée sur une lecture périmée reçoit \texttt{409 Conflict} : le client relit l'objet et recommence. L'arbitrage se fait donc à la réservation, par ce numéro, et non par un verrou ou une file d'attente.}
+  {\qr{sec:pl-concurrence} et \qrf{fig:pl-course}}
+
+\qcmq{a}{Un fournisseur porte déjà les traits \texttt{HW\_CPU\_X86\_AVX2} et \texttt{STORAGE\_DISK\_SSD}. Un administrateur lance \texttt{resource provider trait set} en ne fournissant que \texttt{CUSTOM\_GPU\_A100}. Quel est le résultat ?}
+  {Le fournisseur n'a plus que \texttt{CUSTOM\_GPU\_A100} : la commande remplace l'ensemble de ses traits}
+  {Le fournisseur porte désormais les trois traits : la commande ajoute le nouveau trait à la liste existante}
+  {Les deux traits d'origine sont conservés ; le nouveau n'est pris en compte qu'après la prochaine publication de \texttt{nova-compute}}
+  {La commande échoue, car les traits standard sont en lecture seule et le fournisseur ne peut plus être modifié}{A}
+  {La commande \texttt{resource provider trait set} \emph{remplace} l'ensemble des traits du fournisseur : \texttt{HW\_CPU\_X86\_AVX2} et \texttt{STORAGE\_DISK\_SSD} disparaissent, et les requêtes qui les exigent ne le retiendront plus. Pour ajouter un trait sans perdre les autres, on relit d'abord la liste, puis on la renvoie complétée.}
+  {\qr{sec:pl-traits}}
+
+\qcmq{a}{Après l'ajout d'un nœud de calcul, \texttt{openstack resource provider list} ne montre pas ce nœud et Nova ne lui envoie aucune instance. Quelle cause est la plus probable ?}
+  {Le ratio d'allocation ou la réserve de ce nœud a une valeur inattendue}
+  {Des allocations d'instances supprimées n'ont pas été libérées côté Placement}
+  {Le service \texttt{nova-compute} du nœud n'a pas publié son inventaire dans Placement}
+  {La requête de candidats exige un trait qu'aucun fournisseur n'a déclaré}{C}
+  {Quand un nœud n'apparaît pas, la cause probable est que \texttt{nova-compute}, qui renseigne l'inventaire de son nœud, ne l'a pas publié : on le vérifie avec \texttt{resource provider list} et dans le journal de \texttt{nova-compute}. Les autres causes correspondent à d'autres symptômes : capacité surprenante, usage trop élevé, absence de candidat.}
+  {\qrt{tab:pl-pannes} et \qr{sec:pl-inventaire}}
+
+\qcmq{m}{Parmi les affirmations suivantes sur Placement, lesquelles sont exactes ?}
+  {La réponse à une requête de candidats ne contient que la liste des fournisseurs retenus, sans leur capacité ni leur usage}
+  {Une instance de 4 vCPU qui n'utilise aucun processeur occupe quand même 4 vCPU de la capacité du fournisseur}
+  {Pour une instance démarrée sur un volume, le disque racine n'est pas compté dans la demande de \texttt{DISK\_GB}}
+  {Pendant une migration, Nova libère aussitôt les ressources de l'hôte d'origine, qui redeviennent disponibles pour d'autres instances}{B, C}
+  {Placement compte les allocations et non la consommation réelle, d'où les 4 vCPU occupés par une instance inactive. Pour une instance démarrée sur un volume, le disque racine n'entre pas dans \texttt{DISK\_GB}. En revanche, la réponse contient aussi les \emph{provider summaries} (capacité et usage), et pendant une migration Nova garde les ressources de l'hôte d'origine au nom de la migration jusqu'à la confirmation.}
+  {\qr{sec:pl-inventaire}, \qr{sec:pl-requetes} et \qr{sec:pl-concurrence}}
+
+\qcmchap{chap:glance}{Glance : le service d'images}
+
+\qcmq{f}{Quel est le rôle de Glance dans OpenStack ?}
+  {Il enregistre, découvre et distribue les images de machines virtuelles, avec leurs métadonnées}
+  {Il fournit aux instances des disques persistants, qui survivent à la suppression de la machine}
+  {Il démarre les machines virtuelles sur les nœuds de calcul, à partir d'un gabarit et d'une image}
+  {Il authentifie les utilisateurs et délivre les tokens qui donnent accès aux API des autres services}{A}
+  {Glance est le service d'images : il enregistre, découvre et distribue les images de machines virtuelles avec leurs métadonnées, et Nova y télécharge l'image quand il crée une instance. Glance ne démarre aucune machine (rôle de Nova) ; les disques persistants relèvent de Cinder et l'authentification de Keystone.}
+  {\qr{sec:gl-role} et \qrf{fig:gl-env}}
+
+\qcmq{f}{Une image Glance se compose de deux parties. Où chacune est-elle conservée ?}
+  {Les métadonnées et le fichier du disque ensemble, dans la base de Glance}
+  {Les métadonnées dans un store, le fichier du disque dans la base de Glance}
+  {Les métadonnées dans la base de Glance, le fichier du disque dans un store}
+  {Les métadonnées dans Keystone, le fichier du disque sur le nœud de calcul qui l'utilise}{C}
+  {Une image associe un enregistrement de métadonnées, conservé dans la base de Glance (nom, format, taille, visibilité\dots), et des données, le fichier du disque, placées dans un store (disque local, Ceph, Swift\dots). Nova et Cinder lisent les métadonnées avant même de lire les données.}
+  {\qr{sec:gl-concepts} et \qrf{fig:gl-env}}
+
+\qcmq{f}{Quel statut une image doit-elle avoir pour servir à créer une instance ?}
+  {\texttt{queued} : l'image est enregistrée et attend ses données}
+  {\texttt{active} : statut atteint à la fin de l'envoi ou de l'import}
+  {\texttt{importing} : les données sont en cours de copie vers le store}
+  {\texttt{saving} : Glance est en train de recevoir les données de l'image}{B}
+  {Seule une image \texttt{active} peut servir à créer une instance. Elle atteint ce statut à la fin d'un envoi direct (après \texttt{saving}) ou d'un import (après \texttt{uploading} puis \texttt{importing}). Une image encore \texttt{queued}, en cours de réception ou en cours de copie n'est pas utilisable.}
+  {\qr{sec:gl-statuts} et \qrf{fig:gl-statuts}}
+
+\qcmq{i}{Quelle différence y a-t-il entre la visibilité \texttt{community} et la visibilité \texttt{public} ?}
+  {Une image \texttt{community} n'est lisible que par les projets membres ; une image \texttt{public} l'est par tous les utilisateurs}
+  {Une image \texttt{community} figure dans toutes les listes ; une image \texttt{public} seulement dans celle de son propriétaire}
+  {Une image \texttt{community} est réservée aux administrateurs ; une image \texttt{public} est lisible par tous les utilisateurs}
+  {Les deux sont lisibles par tous ; seule une image \texttt{public} figure dans les listes de tous les projets}{D}
+  {Une image \texttt{public} est lisible par tout utilisateur et figure dans toutes les listes. Une image \texttt{community} est elle aussi lisible par tous, mais ne figure que dans la liste de son propriétaire : les autres projets la trouvent en la cherchant. Les projets membres relèvent de la visibilité \texttt{shared}.}
+  {\qr{sec:gl-partage} et \qrt{tab:gl-visibilite}}
+
+\qcmq{i}{Un utilisateur dispose seulement de l'URL d'une image publiée sur un site : il veut que Glance la télécharge lui-même, puis la copie dans le store. Quelle méthode d'import choisir ?}
+  {\texttt{web-download}}
+  {\texttt{glance-download}}
+  {\texttt{glance-direct}}
+  {\texttt{copy-image}}{A}
+  {\texttt{web-download} fait télécharger l'image par Glance depuis une URL, puis la copie dans le store. Avec \texttt{glance-direct}, c'est l'utilisateur qui envoie les données ; \texttt{glance-download} copie depuis une autre région OpenStack qui partage le même Keystone ; \texttt{copy-image} copie une image existante vers d'autres stores.}
+  {\qr{sec:gl-import}}
+
+\qcmq{a}{Après l'ajout d'un deuxième store dans \texttt{enabled\_backends}, \texttt{glance-api} ne démarre plus. Quelle vérification s'impose en premier ?}
+  {Le cache local des images de base de Nova, qui doit être vidé à chaque changement de la liste des stores}
+  {La valeur de \texttt{node\_staging\_uri}, que le service exige dès que plusieurs stores sont déclarés}
+  {Les endpoints Keystone du service \texttt{image}, qui doivent être recréés pour chaque nouveau store}
+  {Un \texttt{default\_backend} dans \texttt{[glance\_store]}, qui désigne l'un des stores déclarés}{D}
+  {Dès que plusieurs stores sont déclarés dans \texttt{enabled\_backends}, la section \texttt{[glance\_store]} doit fixer \texttt{default\_backend} : le store qui reçoit les images par défaut. Si elle manque ou est invalide, \texttt{glance-api} ne démarre pas. La zone de transit de l'import, les endpoints Keystone et le cache de Nova n'interviennent pas dans ce démarrage.}
+  {\qr{sec:gl-stores}}
+
+\qcmq{a}{Un cloud mélange des hôtes x86 et ARM. Une image porte la propriété \texttt{architecture} correspondant à ARM, et ses instances doivent aller sur un hôte ARM. Qu'est-ce qui guide ce choix de l'hôte ?}
+  {Glance choisit lui-même un hôte ARM, puis charge Nova d'y démarrer l'instance avec cette image}
+  {\texttt{ImagePropertiesFilter}, un filtre de l'ordonnanceur de Nova qui lit les propriétés de l'image}
+  {Le store de l'image, qui ne livre les données qu'aux nœuds de calcul ayant la bonne architecture}
+  {Le champ \texttt{min\_ram} de l'image, qui écarte les hôtes dont le processeur ne convient pas}{B}
+  {Les propriétés d'architecture et d'hyperviseur d'une image sont exploitées par \texttt{ImagePropertiesFilter}, un filtre de l'ordonnanceur de Nova, pour choisir l'hôte. Glance ne démarre aucune machine et ne choisit pas d'hôte ; \texttt{min\_ram} sert à comparer l'image au gabarit, pas à trier les processeurs.}
+  {\qr{sec:gl-proprietes} et \qrt{tab:gl-proprietes}}
+
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {Deux stores de type \texttt{file} peuvent partager le même \texttt{filesystem\_store\_datadir}, car ils se distinguent par leur identifiant.}
+  {À l'envoi d'une image, Glance vérifie que le format de conteneur déclaré correspond bien aux données.}
+  {Quand les disques des instances sont sur Ceph, \texttt{raw} est préférable à \texttt{qcow2}, et Glance peut convertir l'image à l'import.}
+  {Les quotas par projet de Glance sont enregistrés dans Keystone (limites unifiées) et activés par \texttt{use\_keystone\_limits = True}.}{C, D}
+  {Avec des disques sur Ceph, \texttt{raw} est préférable et Glance peut convertir une image \texttt{qcow2} à l'import. Les quotas par projet passent par les limites unifiées de Keystone et l'option \texttt{use\_keystone\_limits}. En revanche, deux stores \texttt{file} doivent avoir des répertoires \texttt{filesystem\_store\_datadir} différents, sinon des données sont perdues, et Glance ne vérifie pas que le format de conteneur déclaré correspond aux données.}
+  {\qr{sec:gl-concepts}, \qr{sec:gl-stores} et \qr{sec:gl-deploiement}}
+
+\qcmchap{chap:neutron}{Neutron : le service réseau}
+
+\qcmq{f}{Quel est le rôle de Neutron dans OpenStack ?}
+  {Il configure les commutateurs physiques du centre de calcul à chaque création de réseau par un projet}
+  {Il authentifie les utilisateurs et fournit les tokens qui donnent accès aux API des autres services}
+  {Il répartit le trafic entrant entre plusieurs instances d'une même application}
+  {Il expose une API pour décrire réseaux, ports et routeurs, que des pilotes réalisent ensuite}{D}
+  {Neutron est le service de réseau : il expose une API pour définir réseaux, sous-réseaux, ports, routeurs et groupes de sécurité, puis des pilotes (plugins) les réalisent sur le commutateur virtuel de chaque nœud, sans que l'utilisateur configure le matériel. La répartition de charge relève d'Octavia et l'authentification de Keystone.}
+  {\qr{sec:neu-role} et \qrf{fig:neu-env}}
+
+\qcmq{f}{Que représente un port dans Neutron ?}
+  {Une plage d'adresses IP d'un réseau, avec sa passerelle et son DHCP, attribuée aux instances}
+  {Le point de connexion d'une carte réseau d'instance à un réseau, qui porte MAC et IP}
+  {Un ensemble de règles de pare-feu qui filtrent le trafic entrant et sortant des instances}
+  {Un domaine de diffusion de niveau 2 isolé, auquel on rattache des équipements}{B}
+  {Un port est le point de connexion d'un équipement, typiquement la carte réseau d'une instance, à un réseau ; il porte une adresse MAC, une IP et des groupes de sécurité. Le domaine de diffusion est le réseau, la plage d'adresses est le sous-réseau, et les règles de pare-feu forment un groupe de sécurité.}
+  {\qr{sec:neu-concepts} et \qrt{tab:neu-objets}}
+
+\qcmq{f}{Qu'est-ce qu'une IP flottante dans Neutron ?}
+  {La plage d'adresses du sous-réseau que le serveur DHCP du réseau peut distribuer aux instances}
+  {Une adresse privée du sous-réseau, réservée à une seule instance, sans lien avec le réseau externe}
+  {Une adresse du réseau externe associée à un port, que le routeur traduit en adresse privée (NAT)}
+  {L'adresse de la passerelle d'un réseau privé, portée par l'interface du routeur vers ce réseau}{C}
+  {Une IP flottante est une adresse du réseau externe qu'on associe à un port : le routeur traduit l'adresse publique en adresse privée par un NAT un pour un, ce qui rend l'instance joignable de l'extérieur. Elle peut être détachée puis réutilisée. Une adresse privée, une plage DHCP ou la passerelle d'un réseau privé sont d'autres notions.}
+  {\qr{sec:neu-securite} et \qrf{fig:neu-topo}}
+
+\qcmq{i}{Dans le plugin ML2, quelle différence y a-t-il entre les \emph{type drivers} et les \emph{mechanism drivers} ?}
+  {Les type drivers disent comment un réseau est encodé (flat, VLAN, VXLAN) ; les mechanism drivers disent qui le réalise (Open vSwitch, OVN)}
+  {Les type drivers servent aux réseaux provider (flat, VLAN) ; les mechanism drivers aux réseaux self-service (VXLAN, Geneve)}
+  {Les type drivers réalisent le réseau sur les nœuds (Open vSwitch, OVN) ; les mechanism drivers disent comment il est encodé (flat, VLAN, VXLAN)}
+  {Les type drivers pilotent les agents L2 et L3 des nœuds ; les mechanism drivers pilotent seulement les agents DHCP et de métadonnées}{A}
+  {ML2 orchestre deux familles de pilotes : les type drivers disent \emph{comment} un réseau est encodé (flat, vlan, vxlan, geneve) et les mechanism drivers disent \emph{qui} le réalise (Open vSwitch, OVN, SR-IOV\dots). Les type drivers couvrent à la fois flat et VLAN, VXLAN et Geneve : ils ne recoupent donc pas la distinction entre provider et self-service.}
+  {\qr{sec:neu-archi} et \qrf{fig:neu-archi}}
+
+\qcmq{i}{Quand Nova crée une instance, dans quel ordre se déroule l'échange avec Neutron pour sa carte réseau ?}
+  {Nova démarre la machine, puis demande le port à Neutron ; la configuration du nœud et l'événement arrivent après le démarrage}
+  {Nova demande le port ; Neutron répond avec MAC et IP ; Nova poursuit aussitôt, sans attendre aucun événement de la part de Neutron}
+  {Nova demande et lie le port ; Neutron fait configurer le nœud, puis prévient Nova par \texttt{network-vif-plugged} ; Nova poursuit}
+  {Neutron configure d'abord le nœud de sa propre initiative ; Nova récupère ensuite le port en interrogeant régulièrement l'API}{C}
+  {Nova demande à Neutron un port par carte réseau et le lie à l'hôte ; Neutron fait configurer le nœud, puis envoie à Nova l'événement \texttt{network-vif-plugged} une fois le port actif. Nova ne poursuit le démarrage qu'à ce moment : l'instance ne démarre qu'une fois le port prêt.}
+  {\qr{sec:neu-port} et \qrf{fig:neu-seq}}
+
+\qcmq{a}{Une instance passe à l'état \texttt{ERROR} dès sa création. \texttt{openstack port show} montre que son port n'a pas pu être lié à l'hôte. Quelle cause chercher en priorité ?}
+  {Un agent ou un pilote Neutron indisponible sur l'hôte qui doit héberger l'instance}
+  {Un sous-réseau créé sans DHCP, car le port ne reçoit alors aucune adresse pour l'instance}
+  {Un routeur sans passerelle externe, qui bloque la création de tout port du réseau}
+  {Une règle de groupe de sécurité manquante, qui empêche alors de lier le port à l'hôte}{A}
+  {Un port non lié signifie que Neutron n'a pas pu le réaliser sur l'hôte choisi : l'agent ou le pilote y est indisponible. On le constate avec \texttt{openstack port show} (champ \texttt{binding\_vif\_type}). Les règles de sécurité, le DHCP et la passerelle du routeur touchent le trafic ou l'adressage, pas la liaison du port à l'hôte.}
+  {\qrt{tab:neu-pannes} et \qr{sec:neu-port}}
+
+\qcmq{a}{Sur un cloud ML2/OVN, la base Northbound décrit bien le nouveau réseau, mais la base Southbound ne contient aucun flux logique qui lui correspond. Quel composant faut-il examiner en priorité ?}
+  {\texttt{neutron-server}, qui doit encore envoyer l'ordre de création aux agents par RabbitMQ}
+  {\texttt{ovn-northd}, qui compile l'état voulu de la base Northbound en flux logiques dans la base Southbound}
+  {\texttt{ovn-controller}, qui écrit les flux logiques dans la base Southbound depuis le pont \texttt{br-int}}
+  {Le pont \texttt{br-int} du nœud, qui doit recevoir ses flux Open vSwitch avant que la base Southbound soit remplie}{B}
+  {Avec OVN, \texttt{neutron-server} écrit l'état voulu dans la base Northbound, \texttt{ovn-northd} le compile en flux logiques dans la base Southbound, puis chaque \texttt{ovn-controller} lit la Southbound et installe les flux Open vSwitch sur \texttt{br-int}. Northbound remplie et Southbound vide désignent donc \texttt{ovn-northd} : le serveur a déjà écrit, et le contrôleur ne fait que lire. Le pilote ML2/OVN passe par les bases (\texttt{ovsdb}), pas par RabbitMQ.}
+  {\qr{sec:neu-ovn} et \qrf{fig:neu-ovn}}
+
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {Un réseau provider de type VLAN est limité à 4094 réseaux ; un réseau self-service en overlay n'a pas cette limite de VLAN.}
+  {Un port peut porter plusieurs groupes de sécurité, dont les règles s'ajoutent.}
+  {Les instances interrogent directement l'API de métadonnées de Nova à l'adresse \texttt{169.254.169.254}, sans aucun relais par Neutron.}
+  {Un groupe de sécurité s'applique au réseau entier : tous les ports d'un même réseau partagent donc les mêmes règles.}{A, B}
+  {Un VLAN est limité à 4094 réseaux, ce qui ne vaut pas pour un overlay, et les règles de plusieurs groupes de sécurité d'un même port s'ajoutent. En revanche, l'agent de métadonnées (ou OVN) relaie la requête de l'instance vers Nova, et un groupe de sécurité s'applique au niveau du port, pas du réseau entier.}
+  {\qr{sec:neu-types}, \qr{sec:neu-securite} et \qr{sec:neu-port}}
+
+\qcmchap{chap:cinder}{Cinder : le stockage bloc}
+% Q1 (f) rôle : avantage d'un volume
+\qcmq{f}{Quel est le principal avantage d'un volume Cinder par rapport au disque éphémère d'une instance ?}
+  {Il est accessible par une API REST en HTTP, sans avoir à être monté comme un disque.}
+  {Il est indépendant de l'instance : il survit à sa suppression et se rattache à une autre.}
+  {Il est toujours hébergé sur l'hôte de calcul, ce qui évite tout accès par le réseau.}
+  {Il est stocké dans Glance, ce qui permet de le dupliquer en quelques secondes.}{B}
+  {Un volume est un disque persistant, indépendant du cycle de vie de l'instance : le disque éphémère disparaît avec elle, alors que le volume survit et peut être détaché puis rattaché ailleurs. L'accès par API REST sans montage décrit Swift, pas Cinder.}
+  {\qr{sec:ci-role}}
+% Q2 (f) architecture : scheduler
+\qcmq{f}{Quel processus de Cinder choisit le backend qui hébergera un nouveau volume ?}
+  {\texttt{cinder-api}}{\texttt{cinder-volume}}{\texttt{cinder-backup}}{\texttt{cinder-scheduler}}{D}
+  {Le \texttt{cinder-scheduler} choisit le backend le plus adapté, comme \texttt{nova-scheduler} le fait pour les instances. L'API se borne à recevoir la requête et à la transmettre ; \texttt{cinder-volume} pilote ensuite le backend retenu par son driver, et \texttt{cinder-backup} s'occupe des sauvegardes.}
+  {\qrt{tab:ci-composants} et \qrf{fig:ci-archi}}
+% Q3 (f) type de volume
+\qcmq{f}{Dans Cinder, à quoi sert un type de volume ?}
+  {À orienter le volume vers un backend et à lui donner des propriétés, comme une QoS.}
+  {À distinguer un volume de démarrage, qui sert de disque racine, d'un volume de données.}
+  {À choisir le dépôt, Swift ou NFS, qui recevra les sauvegardes réalisées pour ce volume.}
+  {À indiquer au driver quel système de fichiers formater dans le volume à sa création.}{A}
+  {Le type de volume est une étiquette qui porte des propriétés (\emph{extra specs}) : il désigne le backend visé et peut recevoir une QoS ; c'est la clé du multi-backend. Le dépôt des sauvegardes relève de \texttt{cinder-backup} et de son driver, pas du type.}
+  {\qr{sec:ci-types} et \qrt{tab:ci-objets}}
+% Q4 (i) snapshot / sauvegarde
+\qcmq{i}{Quelle affirmation distingue correctement un snapshot d'une sauvegarde Cinder ?}
+  {Le snapshot est écrit dans Swift par défaut, alors que la sauvegarde reste sur le backend du volume.}
+  {Le snapshot est toujours une copie complète et lente, alors que la sauvegarde se crée instantanément.}
+  {Le snapshot reste sur le backend du volume, alors que la sauvegarde est écrite dans un dépôt distinct.}
+  {Le snapshot ne peut pas servir à recréer un volume, alors que la sauvegarde le peut.}{C}
+  {Le snapshot est une image ponctuelle gardée sur le même backend (copie sur écriture, création rapide) : il sert au retour arrière et au clonage, mais disparaît avec le backend. La sauvegarde va dans un dépôt séparé, par défaut Swift, et survit à la perte du backend. Un snapshot permet bien de recréer un volume, avec \texttt{--snapshot}.}
+  {\qrt{tab:ci-protection} et \qr{sec:ci-donnees}}
+% Q5 (i) attachement : ordre des étapes
+\qcmq{i}{Dans quel ordre se déroulent les trois temps de l'attachement d'un volume à une instance ?}
+  {Initialiser la connexion, réserver le volume (\texttt{attaching}), puis finaliser (\texttt{in-use}).}
+  {Réserver le volume (\texttt{attaching}), initialiser la connexion, puis finaliser (\texttt{in-use}).}
+  {Réserver le volume (\texttt{attaching}), finaliser (\texttt{in-use}), puis initialiser la connexion.}
+  {Finaliser (\texttt{in-use}), réserver le volume (\texttt{attaching}), puis initialiser la connexion.}{B}
+  {Le volume est d'abord réservé et passe en \texttt{attaching}. Vient ensuite l'initialisation de la connexion : le driver crée l'accès et renvoie les informations de connexion (cible iSCSI, portail, LUN) avec lesquelles \texttt{os-brick} ouvre la session côté hôte. La finalisation, en dernier, met le volume en \texttt{in-use}.}
+  {\qr{sec:ci-attache} et \qrf{fig:ci-seq}}
+% Q6 (a) scénario : volume en error à la création
+\qcmq{a}{Un utilisateur crée un volume avec \texttt{--type gold} : il passe aussitôt en \texttt{error}. La commande \texttt{openstack volume service list} montre tous les services à l'état \texttt{up}, et le backend Ceph a de la place. Quelle est la cause la plus probable ?}
+  {Le bus de messages ne répond pas, si bien que la demande n'atteint pas \texttt{cinder-volume}.}
+  {Le dépôt des sauvegardes, par exemple Swift, est injoignable depuis le nœud de stockage.}
+  {Le nœud de calcul ne parvient pas à joindre la cible iSCSI exposée par le nœud de stockage.}
+  {Les propriétés du type (\texttt{volume\_backend\_name}) ne correspondent à celles d'aucun backend.}{D}
+  {Un volume en \texttt{error} dès la création signifie qu'aucun backend ne convient : le \texttt{CapabilitiesFilter} écarte les backends dont les propriétés diffèrent de celles du type. Service arrêté et place insuffisante sont exclus par l'énoncé. Un bus muet laisse le volume bloqué en \texttt{creating}, un dépôt injoignable fait échouer une sauvegarde, et l'iSCSI du nœud de calcul concerne l'attachement.}
+  {\qrt{tab:ci-pannes} et \qrf{fig:ci-types}}
+% Q7 (a) scénario : multiattach
+\qcmq{a}{Un administrateur crée un type dont la propriété \texttt{multiattach} vaut \texttt{<is> True}, puis attache un volume de ce type à deux instances qui écrivent en même temps. Le volume porte un système de fichiers ordinaire, non prévu pour les accès multiples. Que faut-il en attendre ?}
+  {Les données risquent d'être corrompues, faute d'un système de fichiers pour accès multiples.}
+  {Cinder refuse le second attachement, car un volume ne peut jamais être attaché à deux instances.}
+  {Cinder coordonne lui-même les écritures des deux instances, ce qui évite tout conflit d'accès.}
+  {Le volume est chiffré automatiquement afin d'isoler les écritures de chaque instance.}{A}
+  {Ce type autorise l'attachement à plusieurs instances si le backend le gère, mais il faut alors un système de fichiers pour accès multiples (en grappe) : sinon les données risquent d'être corrompues. La cohérence des écritures n'est donc pas assurée par Cinder. Le chiffrement n'est pas une parade, il est même incompatible avec cette option.}
+  {\qr{sec:ci-types}}
+% Q8 (m) synthèse
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {Une QoS dont le \emph{consumer} est \texttt{front-end} s'applique sur l'hôte de calcul et exige le pilote libvirt de Nova.}
+  {Un administrateur peut migrer vers un autre backend un volume qui possède encore des snapshots.}
+  {Agrandir un volume exige toujours qu'il soit \texttt{available}, quelle que soit la version de l'API.}
+  {Avec LVM, \texttt{cinder-api} et \texttt{cinder-scheduler} s'installent sur le contrôleur, et \texttt{cinder-volume} sur chaque nœud de stockage.}{A, D}
+  {Vrai : le \emph{consumer} \texttt{front-end} limite le débit sur l'hôte de calcul, ce qui exige le pilote libvirt, et l'installation sépare le contrôleur (API, scheduler) des nœuds de stockage (\texttt{cinder-volume}). Faux : la migration exige un volume sans snapshot, et la version 3.42 de l'API autorise l'agrandissement d'un volume attaché.}
+  {\qr{sec:ci-types}, \qr{sec:ci-donnees} et \qr{sec:ci-deploiement}}
+
+\qcmchap{chap:swift}{Swift : le stockage objet}
+% Q1 (f) concepts : hiérarchie
+\qcmq{f}{Comment Swift organise-t-il les données qu'il stocke ?}
+  {Un volume contient des blocs, chacun rattaché à une instance, comme pour un disque.}
+  {Un compte contient des répertoires imbriqués, qui contiennent des fichiers.}
+  {Un compte (un projet) contient des conteneurs, qui contiennent des objets.}
+  {Un conteneur contient des comptes, qui eux-mêmes contiennent des objets.}{C}
+  {Swift distingue trois niveaux : le compte (un projet) regroupe des conteneurs, qui regroupent des objets, c'est-à-dire des données accompagnées de métadonnées. Il n'y a pas de répertoires réels : le nom d'un objet peut contenir des « / ». Les volumes et les blocs relèvent de Cinder.}
+  {\qr{sec:sw-concepts} et \qrf{fig:sw-hier}}
+% Q2 (f) architecture : proxy
+\qcmq{f}{Quel composant de Swift expose l'API REST aux clients et route chaque requête vers les serveurs de stockage ?}
+  {Le proxy (\texttt{swift-proxy})}
+  {Le serveur d'objets}
+  {Le serveur de conteneurs}
+  {Le serveur de comptes}{A}
+  {Le proxy est la porte d'entrée de Swift : il expose l'API, consulte le ring et route la requête, sans stocker lui-même les objets, qui le traversent en flux. Les serveurs de comptes, de conteneurs et d'objets assurent le stockage, chacun pour son niveau.}
+  {\qrt{tab:sw-composants} et \qrf{fig:sw-archi}}
+% Q3 (f) rôle : accès par API
+\qcmq{f}{Comment une application lit-elle un objet conservé dans Swift ?}
+  {En montant le conteneur comme un disque sur le système de l'instance.}
+  {En ouvrant une session iSCSI vers le nœud de stockage, comme pour un volume.}
+  {En attachant le conteneur à une instance avec \texttt{openstack server add volume}.}
+  {Par une requête HTTP à l'API REST de Swift, sans rien monter.}{D}
+  {Swift est un stockage objet : on lit et on écrit des objets par l'API REST en HTTP (par exemple avec \texttt{openstack object save}). Le stockage bloc de Cinder, lui, est vu comme un disque par le système de l'instance ; montage, iSCSI et attachement concernent donc les volumes, pas Swift.}
+  {\qr{sec:sw-role} et \qrt{tab:sw-bloc}}
+% Q4 (i) politiques de stockage
+\qcmq{i}{À quel niveau s'applique une politique de stockage Swift, et peut-on la modifier après coup ?}
+  {Au compte entier ; on peut la changer à tout moment par une simple commande.}
+  {Au conteneur ; elle se choisit à sa création et ne peut plus changer ensuite.}
+  {À chaque objet ; elle se choisit à chaque envoi (\texttt{PUT}).}
+  {Au cluster entier ; elle se règle dans \texttt{proxy-server.conf} pour tous les conteneurs.}{B}
+  {Une politique associe à un conteneur son propre ring, donc ses propres disques et son mode de protection (réplication ou codage d'effacement). Elle se déclare dans \texttt{swift.conf}, se choisit à la création du conteneur et ne change plus ensuite : en changer suppose de recréer le conteneur et de recopier les objets.}
+  {\qr{sec:sw-politiques}}
+% Q5 (i) ring : détermination de l'emplacement
+\qcmq{i}{Comment Swift détermine-t-il les disques qui hébergent un objet donné ?}
+  {Un serveur central tient une table qui associe chaque objet à ses disques de stockage.}
+  {Le proxy interroge tour à tour les nœuds de stockage jusqu'à trouver celui qui a l'objet.}
+  {Le hachage MD5 du chemin désigne une partition, et le ring donne les disques qui l'hébergent.}
+  {Le client choisit lui-même les nœuds de stockage et les indique dans l'en-tête de sa requête.}{C}
+  {Le chemin de l'objet est haché en MD5 ; une partie des bits du hachage désigne la partition, et le ring donne les disques responsables de cette partition, en zones distinctes. Aucune table d'objets n'est à maintenir et aucun serveur central n'intervient, puisque Swift n'a pas de point de contrôle central.}
+  {\qr{sec:sw-ring} et \qrf{fig:sw-ring}}
+% Q6 (a) scénario : cohérence éventuelle
+\qcmq{a}{Un client dépose un objet : Swift répond \texttt{201 Created}. Une seconde plus tard, \texttt{openstack object list} ne montre pas encore l'objet, mais celui-ci peut être téléchargé. Quelle est l'explication la plus probable ?}
+  {La cohérence est éventuelle : la liste du conteneur n'est pas encore à jour, et les updaters la rattrapent.}
+  {L'objet n'est encore stocké que sur le proxy, qui le transmettra plus tard aux serveurs d'objets du ring.}
+  {Le ring n'a pas encore été reconstruit pour y inscrire le nouvel objet, ce qui retarde son affichage.}
+  {L'auditor a mis l'objet en quarantaine parce que son fichier est corrompu, en attendant la réplication.}{A}
+  {L'objet est écrit sur les serveurs d'objets, d'où la réponse \texttt{201} et le téléchargement possible ; en revanche la liste du conteneur peut ne pas être encore à jour, un échec de mise à jour étant rattrapé plus tard par les updaters. C'est la « fenêtre de cohérence ». L'objet traverse le proxy sans y être stocké, et les auditors ne mettent en quarantaine que des fichiers corrompus, ce que rien n'indique ici.}
+  {\qr{sec:sw-ecriture} et \qrt{tab:sw-pannes}}
+% Q7 (a) gros objets : DLO / SLO
+\qcmq{a}{Une application doit déposer un fichier de 30~Go. Elle le découpera en segments et devra pouvoir en ajouter ou en retirer après le dépôt du manifeste. Quel mécanisme choisir ?}
+  {Un manifeste statique (SLO), qui reste modifiable après son dépôt.}
+  {Un manifeste dynamique (DLO), qui s'appuie sur la liste du conteneur.}
+  {Un envoi en un seul objet, la limite de 5~Go ne valant que pour les manifestes.}
+  {Une politique en codage d'effacement, dont les fragments remplacent les segments.}{B}
+  {Au-delà de 5~Go par défaut, un objet est découpé en segments réunis par un manifeste. Le manifeste dynamique (DLO) s'appuie sur la liste du conteneur, donc sur une information à cohérence éventuelle, mais accepte l'ajout ou le retrait de segments ; le manifeste statique (SLO) est figé une fois déposé. Les fragments du codage d'effacement concernent la protection des données, pas le découpage des gros objets.}
+  {\qr{sec:sw-fonctions}}
+% Q8 (m) synthèse
+\qcmq{m}{Parmi les affirmations suivantes sur Swift, lesquelles sont exactes ?}
+  {Le serveur d'objets garde les métadonnées de chaque objet dans une base SQLite.}
+  {Quand un serveur désigné est indisponible lors d'un \texttt{PUT}, le proxy demande au ring un nœud de secours (\emph{handoff}).}
+  {Par défaut, chaque partition est répliquée trois fois, sur des zones et des disques aussi distincts que la capacité le permet.}
+  {Une suppression est notée par une \emph{tombstone}, afin de pouvoir être répliquée à son tour.}{B, C, D}
+  {Vrai : le proxy obtient un handoff du ring si un serveur manque ; le ring isole les trois répliques par défaut autant que la capacité le permet ; la tombstone permet de répliquer une suppression. Faux : les bases SQLite sont celles des serveurs de comptes et de conteneurs, alors que le serveur d'objets stocke les métadonnées dans des attributs étendus des fichiers.}
+  {\qr{sec:sw-ecriture}, \qr{sec:sw-ring} et \qrt{tab:sw-composants}}
+
+\qcmchap{chap:horizon}{Horizon : le tableau de bord}
+% Q1 (f) rôle
+\qcmq{f}{Qu'est-ce qu'Horizon dans OpenStack ?}
+  {Le service d'identité, qui authentifie les utilisateurs et délivre les tokens.}
+  {Un orchestrateur qui déploie des piles de ressources à partir de modèles.}
+  {Un répartiteur de charge qui distribue les requêtes entre plusieurs serveurs.}
+  {Une interface Web qui appelle les API REST des services avec les droits de l'utilisateur.}{D}
+  {Horizon est l'implémentation de référence du tableau de bord : une application Django qui appelle les API REST des services avec les droits de l'utilisateur connecté, comme le fait la CLI. L'authentification est le rôle de Keystone ; la répartition de charge et l'orchestration sont confiées à d'autres services.}
+  {\qr{sec:ho-role} et \qrf{fig:ho-env}}
+% Q2 (f) concepts : panneau
+\qcmq{f}{Dans l'interface d'Horizon, que désigne un \emph{panneau} (\emph{panel}) ?}
+  {Une page de la navigation latérale, rangée dans un groupe d'un dashboard.}
+  {Une entrée de la navigation principale, comme \emph{Project} ou \emph{Admin}.}
+  {Un fichier \emph{enabled} qui déclare un dashboard auprès d'Horizon.}
+  {Un service d'OpenStack détecté automatiquement, comme Cinder ou Swift.}{A}
+  {Les dashboards sont les entrées de la navigation principale (\emph{Project}, \emph{Admin}, \emph{Identity}, \emph{Settings}) ; chacun regroupe des groupes de panneaux, qui sont les pages de la navigation latérale. Les fichiers \emph{enabled} servent seulement à déclarer dashboards et panneaux.}
+  {\qr{sec:ho-concepts} et \qrf{fig:ho-hier}}
+% Q3 (f) installation : prise en compte d'une modification
+\qcmq{f}{Après avoir modifié \texttt{local\_settings.py}, que faut-il faire pour que la modification soit prise en compte ?}
+  {Redémarrer le service Keystone, qui relit la configuration d'Horizon.}
+  {Exécuter \texttt{manage.py collectstatic} pour régénérer les fichiers statiques.}
+  {Recharger Apache, par exemple avec \texttt{systemctl reload apache2.service}.}
+  {Réinstaller le paquet \texttt{openstack-dashboard} sur le contrôleur.}{C}
+  {Horizon est une application WSGI servie par Apache : elle relit \texttt{local\_settings.py} quand Apache est rechargé, et une modification sans effet signale justement un Apache non rechargé. La commande \texttt{collectstatic} ne concerne que les fichiers statiques des thèmes et du logo.}
+  {\qr{sec:ho-install} et \qrt{tab:ho-pannes}}
+% Q4 (i) architecture : openstack_auth
+\qcmq{i}{Dans le projet Horizon, quel élément interroge Keystone pour authentifier l'utilisateur ?}
+  {La bibliothèque \texttt{horizon}, utilisable dans n'importe quel projet Django.}
+  {Le module \texttt{openstack\_auth}, un backend d'authentification de Django.}
+  {Le projet \texttt{openstack\_dashboard}, qui contient les dashboards d'OpenStack.}
+  {Le fichier \texttt{dashboard.py} de chaque dashboard.}{B}
+  {L'authentification est confiée à \texttt{openstack\_auth}, un backend d'authentification de Django qui interroge Keystone, et dont l'objet utilisateur conserve le token, le catalogue, le projet et les rôles. La bibliothèque \texttt{horizon} fournit des briques génériques, \texttt{openstack\_dashboard} contient les dashboards, et \texttt{dashboard.py} se borne à déclarer un dashboard.}
+  {\qr{sec:ho-archi} et \qrf{fig:ho-archi}}
+% Q5 (i) requête : ouverture du panneau Volumes
+\qcmq{i}{Un utilisateur déjà connecté ouvre le panneau \emph{Volumes}. Que fait Horizon pour construire la page ?}
+  {Il demande à Keystone un nouveau token, avec le mot de passe de l'utilisateur, à chaque page affichée.}
+  {Il renvoie au navigateur le token, qui interroge ensuite lui-même l'API de Cinder.}
+  {Il lit la liste des volumes dans sa propre base, qui conserve l'état de la plateforme.}
+  {Il appelle l'API de Cinder avec le token gardé en session, puis renvoie une page HTML.}{D}
+  {À la connexion, Keystone a délivré un token et un catalogue, conservés en session ; le navigateur ne reçoit qu'un cookie de session. Pour chaque page, Horizon appelle l'API du service (ici \texttt{GET /v3/volumes/detail}, avec l'en-tête \texttt{X-Auth-Token}) puis renvoie la page HTML. Il ne conserve pas l'état de la plateforme, qui reste dans les services.}
+  {\qr{sec:ho-requete} et \qrf{fig:ho-seq}}
+% Q6 (a) scénario : erreur 400
+\qcmq{a}{Un nom DNS \texttt{cloud.example.org} est placé devant Horizon. Dès l'ouverture, le navigateur affiche une erreur 400 (\emph{Bad Request}), alors que l'ancienne adresse fonctionne toujours. Quelle est la cause la plus probable ?}
+  {Les sessions sont gardées en mémoire locale, donc non partagées entre les processus.}
+  {Le nouveau nom n'est pas dans le réglage \texttt{ALLOWED\_HOSTS} de \texttt{local\_settings.py}.}
+  {L'URL de Keystone (\texttt{OPENSTACK\_KEYSTONE\_URL}) est erronée ou le domaine est faux.}
+  {Les fichiers statiques n'ont pas été régénérés avec \texttt{collectstatic}.}{B}
+  {Une erreur 400 à l'ouverture indique que le nom utilisé dans l'URL ne figure pas dans \texttt{ALLOWED\_HOSTS}, qui liste les noms d'hôte autorisés à servir le tableau de bord. Des sessions en mémoire locale provoquent des déconnexions aléatoires, une URL Keystone fausse une connexion refusée, et des fichiers statiques non régénérés un thème ou un logo inchangé.}
+  {\qrt{tab:ho-pannes} et \qrt{tab:ho-reglages}}
+% Q7 (a) choix de conception : stockage des sessions
+\qcmq{a}{Horizon est déployé sur deux serveurs. L'équipe veut des sessions partagées entre eux, sans installer de cache ni de base de données dédiés. Quelle option correspond à ces contraintes, et avec quelle limite ?}
+  {Mémoire locale : aucune limite particulière, car chaque processus garde ses propres sessions.}
+  {Memcached : partagé entre serveurs, mais il demande un service memcached et un module Python.}
+  {Cookies signés : aucune infrastructure, mais données chez l'utilisateur et de taille limitée.}
+  {Base de données : persistante et évolutive, mais parmi les plus lentes.}{C}
+  {Seuls les cookies signés partagent les sessions sans infrastructure : les données sont stockées chez l'utilisateur et transmises à chaque requête, d'où une taille limitée. La mémoire locale n'est pas partagée entre processus, Memcached exige un service et un module Python, et la base de données est un composant de plus, parmi les plus lents.}
+  {\qrt{tab:ho-sessions} et \qr{sec:ho-install}}
+% Q8 (m) synthèse
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {Un cookie \emph{secure} n'est envoyé que par une connexion chiffrée, et un cookie \emph{HttpOnly} est inaccessible aux scripts de la page.}
+  {Les panneaux visibles ne dépendent que des rôles de l'utilisateur, jamais des services installés.}
+  {Un fichier \emph{enabled} qui retire un panneau (\texttt{REMOVE\_PANEL}) doit être lu après ceux qui le déclarent, d'où un numéro élevé.}
+  {Après la modification d'un thème, aucune régénération des fichiers statiques n'est nécessaire.}{A, C}
+  {Vrai : les définitions des cookies \emph{secure} et \emph{HttpOnly} sont exactes, et les fichiers \emph{enabled} sont lus par ordre alphabétique, donc un numéro élevé place celui qui retire le panneau après ceux qui le déclarent. Faux : ce que l'on voit dépend à la fois des services installés et des rôles, et après un changement de thème on régénère les fichiers statiques avec \texttt{collectstatic}.}
+  {\qr{sec:ho-securite}, \qr{sec:ho-perso} et \qr{sec:ho-concepts}}
+
+% QCM du chapitre Octavia (8 questions : f f f i i a a m)
+\qcmchap{chap:octavia}{Octavia : la répartition de charge}
+
+% --- Q1 (f) : rôle du service
+\qcmq{f}{Quel est le rôle d'Octavia dans OpenStack ?}
+  {Il exécute les instances des applications sur des hyperviseurs et choisit l'hôte qui accueille chacune d'elles.}
+  {Il distribue le trafic entrant vers un groupe de serveurs et cesse d'en envoyer à ceux qui ne répondent plus.}
+  {Il attribue les adresses IP flottantes aux instances et gère les routeurs virtuels des différents projets.}
+  {Il conserve et protège les certificats TLS et les clés utilisés par les applications hébergées dans le cloud.}
+  {B}
+  {Octavia est le service de répartition de charge : il présente l'application derrière une adresse unique et distribue le trafic vers un groupe de serveurs, en écartant ceux qui ne répondent plus. Les instances relèvent de Nova, les adresses et les réseaux de Neutron, les certificats TLS de Barbican.}
+  {\qr{sec:oc-role} et \qrf{fig:oc-env}}
+
+% --- Q2 (f) : l'amphore
+\qcmq{f}{Dans Octavia, qu'est-ce qu'une amphore ?}
+  {Un processus du contrôleur qui reçoit les requêtes REST et les transmet par la messagerie.}
+  {Un serveur de l'application, déclaré dans un pool et sondé par le health monitor.}
+  {L'adresse unique sur laquelle les clients envoient leurs requêtes vers l'application.}
+  {Une instance Nova qui exécute HAProxy et répartit réellement le trafic des clients.}
+  {D}
+  {L'amphore est la machine virtuelle qui fait le travail de répartition : dans l'implémentation de référence, c'est une instance Nova qui exécute HAProxy, créée et configurée par le contrôleur. Le processus qui reçoit les requêtes REST est \texttt{octavia-api}, le serveur de l'application est un member et l'adresse d'entrée est le VIP.}
+  {\qr{sec:oc-archi} et \qrt{tab:oc-composants}}
+
+% --- Q3 (f) : objet qui porte l'algorithme
+\qcmq{f}{Quel objet d'Octavia porte l'algorithme de répartition, par exemple \texttt{ROUND\_ROBIN} ?}
+  {Le pool, le groupe de members vers lequel le listener transmet.}
+  {Le listener, qui écoute un protocole et un port.}
+  {Le health monitor, qui sonde périodiquement les members.}
+  {Le VIP, l'adresse de service sur laquelle arrive le trafic.}
+  {A}
+  {Le pool regroupe les members et porte l'algorithme qui décide quel member reçoit chaque nouvelle connexion (à tour de rôle, moins de connexions actives, hachage de l'adresse source\dots). Le listener ne fait qu'écouter un protocole et un port, le health monitor sonde les members et le VIP est l'adresse d'entrée.}
+  {\qrt{tab:oc-objets} et \qrt{tab:oc-algos}}
+
+% --- Q4 (i) : ordre de création des objets
+\qcmq{i}{D'après l'exemple du cours, dans quel ordre crée-t-on les objets d'un répartiteur HTTP minimal avec la CLI ?}
+  {Répartiteur, pool, listener, members, puis health monitor.}
+  {Listener, répartiteur, pool, members, puis health monitor.}
+  {Répartiteur, listener, pool, members, puis health monitor.}
+  {Répartiteur, listener, members, pool, puis health monitor.}
+  {C}
+  {Chaque objet se rattache au précédent : le listener au répartiteur, le pool au listener (option \texttt{--listener}), puis les members et le health monitor au pool, qui doit donc exister avant eux. Les commandes suivent cet ordre des objets : répartiteur, listener, pool, members, health monitor.}
+  {\qr{sec:oc-creation} et \qrt{tab:oc-objets}}
+
+% --- Q5 (i) : provisioning_status / operating_status
+\qcmq{i}{Quelle différence y a-t-il entre le \texttt{provisioning\_status} et l'\texttt{operating\_status} d'un objet Octavia ?}
+  {Le premier indique si l'objet fonctionne normalement ; le second, si sa création a réussi.}
+  {Le premier indique si la création a réussi ; le second, si l'objet fonctionne.}
+  {Le premier décrit l'état des amphores, le second celui des members du pool.}
+  {Le premier s'applique aux répartiteurs, le second seulement aux members des pools.}
+  {B}
+  {Chaque objet porte deux statuts qui répondent à deux questions différentes. Le statut de provisionnement (\texttt{ACTIVE}, \texttt{PENDING\_CREATE}, \texttt{ERROR}\dots) dit si la création ou la modification a réussi ; le statut opérationnel (\texttt{ONLINE}, \texttt{DEGRADED}, \texttt{OFFLINE}\dots) dit si l'objet fonctionne. Un répartiteur peut donc être \texttt{ACTIVE} et \texttt{DEGRADED} à la fois.}
+  {\qr{sec:oc-concepts} et \qrt{tab:oc-statuts}}
+
+% --- Q6 (a) : diagnostic, amphores remplacées en boucle
+\qcmq{a}{Les amphores d'un répartiteur sont remplacées sans cesse, alors que les serveurs de l'application répondent correctement. Quelle est la cause la plus probable ?}
+  {Les heartbeats n'arrivent pas au health manager (réseau de gestion, clé \texttt{heartbeat\_key}).}
+  {Le chemin de test du health monitor n'existe pas sur les serveurs de l'application.}
+  {L'IP flottante n'a pas été associée au port du VIP du répartiteur.}
+  {L'étiquette de l'image de l'amphore ne correspond à aucune image de Glance.}
+  {A}
+  {Une amphore dont les heartbeats manquent au-delà de \texttt{heartbeat\_timeout} est remplacée par le worker ; si les heartbeats sont perdus en permanence (réseau de gestion, \texttt{heartbeat\_key}, \texttt{controller\_ip\_port\_list}), le remplacement se répète. Un chemin de test faux met des members en \texttt{ERROR}, une IP flottante absente rend le VIP injoignable et une étiquette d'image erronée fait échouer la création.}
+  {\qrt{tab:oc-pannes} et \qr{sec:oc-sante}}
+
+% --- Q7 (a) : choix de conception, TLS
+\qcmq{a}{Une équipe veut que le répartiteur termine le TLS avec un certificat stocké dans Barbican, tout en chiffrant aussi le trafic entre l'amphore et les members. Quelle configuration retenir ?}
+  {Un listener \texttt{HTTPS} et un pool \texttt{HTTPS}, sans terminaison sur le répartiteur.}
+  {Un listener \texttt{TERMINATED\_HTTPS} seul, le pool restant en \texttt{HTTP}.}
+  {Un listener \texttt{HTTP} avec l'option \texttt{--allowed-cidr} limitée aux clients.}
+  {Un listener \texttt{TERMINATED\_HTTPS} avec \texttt{--default-tls-container}, et \texttt{--enable-tls} sur le pool.}
+  {D}
+  {Terminer le TLS sur le répartiteur suppose un listener \texttt{TERMINATED\_HTTPS} dont le certificat est dans Barbican. Pour chiffrer aussi vers les members, il faut ajouter le rechiffrement côté pool (\texttt{--enable-tls}). Un listener et un pool \texttt{HTTPS} laissent au contraire le chiffrement aux serveurs, sans terminaison, et \texttt{TERMINATED\_HTTPS} seul laisserait le dernier tronçon en clair.}
+  {\qrt{tab:oc-besoins} et \qr{sec:oc-avance}}
+
+% --- Q8 (m) : synthèse, A et C
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {Le pilote \texttt{amphora} est celui par défaut ; d'autres pilotes (OVN, F5\dots) peuvent le remplacer.}
+  {Par défaut, un répartiteur est déployé en topologie \texttt{ACTIVE\_STANDBY} : deux amphores, dont une de secours.}
+  {La création est asynchrone : l'API répond aussitôt avec un objet en \texttt{PENDING\_CREATE}.}
+  {Le contrôleur est sur le chemin des données : il reçoit le trafic des clients et le transmet aux members.}
+  {A, C}
+  {Le pilote \texttt{amphora}, de référence, est le choix par défaut et d'autres pilotes peuvent le remplacer ; la création est asynchrone et renvoie d'abord un objet en \texttt{PENDING\_CREATE}. En revanche, la topologie par défaut est \texttt{SINGLE}, avec une seule amphore ; \texttt{ACTIVE\_STANDBY}, à deux amphores dont une de secours, est une option que l'administrateur propose par des flavors de répartiteur. Enfin le contrôleur n'est pas sur le chemin des données : les amphores répartissent elles-mêmes le trafic.}
+  {\qr{sec:oc-archi}, \qr{sec:oc-creation} et \qr{sec:oc-sante}}
+
+% QCM du chapitre Heat (8 questions : f f f i i a a m)
+\qcmchap{chap:heat}{Heat : l'orchestration}
+
+% --- Q1 (f) : rôle du service
+\qcmq{f}{Quel est le rôle de Heat dans OpenStack ?}
+  {Il remplace Nova, Neutron et Cinder : il crée lui-même les serveurs, les réseaux et les volumes.}
+  {Il répartit le trafic entrant entre plusieurs instances, derrière une adresse de service unique.}
+  {Il crée, modifie et détruit une infrastructure décrite dans un fichier, en appelant les API des autres services.}
+  {Il authentifie les utilisateurs et délivre les tokens qui permettent d'appeler les API.}
+  {C}
+  {Heat est le service d'orchestration : il lit un modèle qui décrit des ressources et leurs liens, puis crée la stack correspondante en appelant les API de Nova, Neutron, Cinder et des autres services. Il ne remplace aucun d'eux ; la répartition de charge relève d'Octavia et l'authentification de Keystone.}
+  {\qr{sec:he-role} et \qrf{fig:he-env}}
+
+% --- Q2 (f) : vocabulaire, la stack
+\qcmq{f}{Dans Heat, qu'appelle-t-on une stack ?}
+  {L'ensemble des ressources créé à partir d'un modèle, unité de création, de mise à jour et de suppression.}
+  {Le fichier YAML qui décrit l'infrastructure voulue, avec ses paramètres et ses sorties.}
+  {Une valeur d'entrée qui personnalise un modèle, par exemple le gabarit d'un serveur.}
+  {Un fichier de valeurs de paramètres et de remplacements de types de ressources.}
+  {A}
+  {La stack est ce que Heat matérialise à partir d'un modèle : un ensemble de ressources que l'on crée, met à jour et supprime d'un bloc. Le fichier YAML est le modèle, la valeur d'entrée est un paramètre, et le fichier de valeurs et de remplacements est l'environnement.}
+  {\qr{sec:he-concepts} et \qrt{tab:he-objets}}
+
+% --- Q3 (f) : composants
+\qcmq{f}{Dans l'architecture de Heat, quel composant orchestre la création des ressources et appelle les API des autres services ?}
+  {\texttt{heat-api}, l'API REST native, qui reçoit les requêtes des clients.}
+  {\texttt{heat-api-cfn}, l'API de type CloudFormation compatible avec AWS.}
+  {La base de données, qui enregistre l'état des stacks.}
+  {\texttt{heat-engine}, le moteur qui reçoit les requêtes par RPC.}
+  {D}
+  {Les deux API ne font que transmettre les requêtes au moteur par RPC ; c'est \texttt{heat-engine} qui orchestre la création des modèles, appelle les API des autres services et renvoie des événements à l'appelant. La base de données ne fait que conserver l'état des stacks.}
+  {\qr{sec:he-archi} et \qrt{tab:he-composants}}
+
+% --- Q4 (i) : fonctions intrinsèques
+\qcmq{i}{Dans la section \texttt{outputs} d'un modèle, on veut renvoyer l'adresse IP d'un serveur, connue seulement une fois celui-ci créé. Quelle fonction employer ?}
+  {\texttt{get\_param}, qui lit la valeur d'un paramètre fourni à la création.}
+  {\texttt{get\_attr}, qui lit un attribut de la ressource, connu à l'exécution.}
+  {\texttt{get\_resource}, qui donne l'identifiant d'une autre ressource du modèle.}
+  {\texttt{get\_file}, qui joint à la requête le contenu d'un fichier.}
+  {B}
+  {La fonction \texttt{get\_attr} retourne un attribut d'une ressource, connu seulement à l'exécution, comme \texttt{first\_address} pour un serveur. \texttt{get\_resource} ne donne que l'identifiant de la ressource, \texttt{get\_param} la valeur d'un paramètre fourni à la création et \texttt{get\_file} le contenu d'un fichier joint à la requête.}
+  {\qr{sec:he-modele} et \qrt{tab:he-fonctions}}
+
+% --- Q5 (i) : dépendance explicite
+\qcmq{i}{Dans un modèle, la ressource \texttt{app} doit être créée après la ressource \texttt{db}, mais n'utilise aucune de ses valeurs. Comment l'exprimer ?}
+  {Déclarer \texttt{depends\_on: db} dans la ressource \texttt{app}, sans autre référence.}
+  {Écrire la ressource \texttt{db} avant \texttt{app} dans la section \texttt{resources}.}
+  {Déclarer \texttt{db} comme paramètre du modèle et le lire avec \texttt{get\_param}.}
+  {Passer \texttt{db} dans un fichier d'environnement fourni avec l'option \texttt{-e}.}
+  {A}
+  {L'attribut \texttt{depends\_on} sert à déclarer une dépendance explicite quand aucune référence n'en crée une. Heat déduit l'ordre de création du graphe formé par les références (\texttt{get\_resource}, \texttt{get\_attr}) et par \texttt{depends\_on}, non de la place des ressources dans le fichier. Un paramètre ou un environnement ne portent que des valeurs.}
+  {\qrt{tab:he-fonctions} et \qr{sec:he-cycle}}
+
+% --- Q6 (a) : le trust pour les opérations différées
+\qcmq{a}{Plusieurs heures après la création d'une stack, une alarme appelle l'URL de signal d'une politique de mise à l'échelle, sans fournir de token. Comment Heat peut-il tout de même créer des serveurs ?}
+  {Le moteur réutilise le token de l'utilisateur, conservé depuis la création de la stack.}
+  {Un utilisateur du domaine \texttt{heat}, doté du rôle \texttt{heat\_stack\_user}, crée lui-même les serveurs.}
+  {Le moteur utilise le trust créé avec la stack, qui lui délègue les rôles nécessaires du propriétaire.}
+  {L'alarme appelle directement l'API de Nova avec les droits de l'administrateur du cloud.}
+  {C}
+  {Pour une opération différée, le moteur ne dispose pas du token de l'utilisateur. Il s'appuie sur le trust créé à la création de la stack : le propriétaire y délègue à Heat les rôles nécessaires, et le moteur obtient un token limité pour agir en son nom. Le rôle \texttt{heat\_stack\_user} des utilisateurs du domaine \texttt{heat} restreint au contraire l'API accessible.}
+  {\qr{sec:he-archi} et \qr{sec:he-avance}}
+
+% --- Q7 (a) : diagnostic, stack bloquée en CREATE_IN_PROGRESS
+\qcmq{a}{Une stack reste très longtemps en \texttt{CREATE\_IN\_PROGRESS} alors que son serveur est démarré ; son modèle contient une condition d'attente. Quelle cause et quelle vérification sont les plus plausibles ?}
+  {Le modèle est refusé : le valider avec \texttt{openstack orchestration template validate}.}
+  {Le signal n'arrive pas : contrôler \texttt{heat\_waitcondition\_server\_url} et l'accès du serveur à cette URL.}
+  {Le flavor demandé n'existe pas : vérifier le flavor auprès de Nova.}
+  {Une ressource a échoué : lister les échecs avec \texttt{openstack stack failures list}.}
+  {B}
+  {Un serveur démarré et une stack qui reste en \texttt{CREATE\_IN\_PROGRESS} indiquent que la condition d'attente ne reçoit pas son signal : l'URL de signal est injoignable depuis le serveur, d'où le contrôle de \texttt{heat\_waitcondition\_server\_url}. Un modèle refusé n'aurait pas créé de stack, et un flavor inexistant ou une ressource en échec conduiraient à \texttt{CREATE\_FAILED}.}
+  {\qrt{tab:he-pannes} et \qrt{tab:he-avance}}
+
+% --- Q8 (m) : synthèse, B et D
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {La version du modèle (\texttt{heat\_template\_version}) est facultative : à défaut, Heat applique la version la plus récente.}
+  {Les ressources sans dépendance entre elles sont créées en parallèle, et la suppression suit l'ordre inverse de la création.}
+  {Par défaut, modifier le contenu de \texttt{user\_data} met le serveur à jour en place, sans le recréer.}
+  {La création d'une stack est asynchrone : l'API répond avec l'identifiant de la stack, en \texttt{CREATE\_IN\_PROGRESS}.}
+  {B, D}
+  {La version du modèle est obligatoire, car elle choisit les fonctions disponibles. Heat crée en parallèle ce qui n'a pas de lien et supprime dans l'ordre inverse du graphe. L'API répond aussitôt avec l'identifiant de la stack, pendant que la création se poursuit. En revanche, changer le contenu de \texttt{user\_data} remplace le serveur (une nouvelle instance est créée, puis l'ancienne supprimée) ; seul un changement de \texttt{flavor} le redimensionne.}
+  {\qr{sec:he-modele} et \qr{sec:he-cycle}}
+
+% QCM du chapitre Ironic (8 questions : f f f i i a a m)
+\qcmchap{chap:ironic}{Ironic : le bare metal en tant que service}
+
+% --- Q1 (f) : rôle du service
+\qcmq{f}{Que fait le service Ironic ?}
+  {Il partage un serveur physique entre plusieurs locataires grâce à un hyperviseur.}
+  {Il fournit des clusters Kubernetes prêts à l'emploi aux utilisateurs du cloud.}
+  {Il fournit des bases de données gérées, sans que l'utilisateur administre le serveur.}
+  {Il provisionne des serveurs physiques dédiés à un seul utilisateur, sans hyperviseur.}
+  {D}
+  {Ironic est le service Bare Metal : il enregistre des machines physiques, les alimente, les démarre par le réseau et y écrit une image, de sorte qu'un serveur entier soit dédié à un seul utilisateur, sans hyperviseur. Les clusters Kubernetes relèvent de Magnum et les bases de données de Trove.}
+  {\qr{sec:ir-role} et \qrf{fig:ir-env}}
+
+% --- Q2 (f) : le type de matériel
+\qcmq{f}{Dans Ironic, que désigne le type de matériel (\emph{hardware type}) d'un nœud, par exemple \texttt{ipmi} ou \texttt{redfish} ?}
+  {L'étiquette qui relie le nœud au flavor que les utilisateurs demandent.}
+  {L'étape du cycle de vie du nœud, par exemple \texttt{available} ou \texttt{active}.}
+  {La famille de matériel, qui fixe la façon de piloter le serveur à distance.}
+  {La carte réseau du nœud, déclarée par son adresse MAC pour le raccorder au réseau.}
+  {C}
+  {Le type de matériel est la famille à laquelle appartient le serveur ; il détermine comment le conductor le pilote à distance (IPMI, Redfish\dots), au moyen d'interfaces matérielles. L'étiquette liée au flavor est la classe de ressources, l'étape du cycle de vie est l'état de provisionnement et la carte réseau est un port.}
+  {\qr{sec:ir-concepts} et \qrt{tab:ir-objets}}
+
+% --- Q3 (f) : l'état available
+\qcmq{f}{Dans quel état un nœud est-il prêt à être choisi par Nova pour une nouvelle instance ?}
+  {\texttt{manageable}, l'état dans lequel on peut modifier le nœud.}
+  {\texttt{available}, atteint après le nettoyage du nœud.}
+  {\texttt{enroll}, l'état initial d'un nœud tout juste créé.}
+  {\texttt{active}, l'état d'un nœud qui exécute déjà une charge de travail.}
+  {B}
+  {Un nœud \texttt{available} est prêt : Nova peut le choisir. En \texttt{enroll}, Ironic sait seulement que le nœud existe ; en \texttt{manageable}, il est vérifié et on peut le modifier ; en \texttt{active}, une charge de travail tourne déjà dessus.}
+  {\qr{sec:ir-etats} et \qrt{tab:ir-etats}}
+
+% --- Q4 (i) : classe de ressources et flavor
+\qcmq{i}{Un nœud a la classe de ressources \texttt{baremetal-gpu}. Quelle propriété de flavor réclame exactement un de ces nœuds ?}
+  {\texttt{resources:CUSTOM\_BAREMETAL\_GPU=1}}
+  {\texttt{resources:baremetal-gpu=1}}
+  {\texttt{resources:CUSTOM\_BAREMETAL\_GPU=0}}
+  {\texttt{trait:CUSTOM\_BAREMETAL\_GPU=required}}
+  {A}
+  {Le nom de la classe est mis en majuscules, préfixé par \texttt{CUSTOM\_}, et la ponctuation devient des soulignés : \texttt{baremetal-gpu} donne \texttt{CUSTOM\_BAREMETAL\_GPU}. Le flavor en demande exactement une unité avec la valeur 1 ; la valeur 0 ne réclamerait aucun nœud, et un trait décrit un attribut qualitatif, non une classe de ressources.}
+  {\qr{sec:ir-enrol} et \qrt{tab:ir-objets}}
+
+% --- Q5 (i) : inspection en bande / hors bande
+\qcmq{i}{En quoi l'inspection en bande d'un nœud diffère-t-elle de l'inspection hors bande ?}
+  {Hors bande, l'agent relève le matériel depuis un ramdisk ; en bande, c'est le BMC qui s'en charge.}
+  {L'inspection hors bande efface les disques du nœud, alors que l'inspection en bande les laisse intacts.}
+  {En bande, l'agent relève le matériel depuis un ramdisk : plus long et plus fragile, mais indépendant du constructeur.}
+  {L'inspection hors bande exige l'état \texttt{active}, l'inspection en bande l'état \texttt{manageable}.}
+  {C}
+  {L'inspection relève les propriétés matérielles du nœud (mémoire, disque, architecture\dots) et part de l'état \texttt{manageable}. Hors bande, elle passe par le BMC (types \texttt{redfish}, \texttt{idrac}) ; en bande, c'est l'agent qui l'exécute dans un ramdisk, ce qui est plus long et plus fragile mais ne dépend pas du constructeur.}
+  {\qr{sec:ir-reseau}}
+
+% --- Q6 (a) : diagnostic, nœud bloqué en wait call-back
+\qcmq{a}{Une instance bare metal est en cours de déploiement, mais le nœud reste très longtemps en \texttt{wait call-back}. Quelle piste est la plus pertinente ?}
+  {Les étapes de nettoyage ont échoué : lire \texttt{last\_error} et passer le nœud par \texttt{manage}.}
+  {Le BMC est injoignable : contrôler les identifiants \texttt{ipmi\_username} et \texttt{ipmi\_password}.}
+  {Nova n'a pas encore découvert le nœud : lancer \texttt{nova-manage cell\_v2 discover\_hosts}.}
+  {Le serveur ne démarre pas le ramdisk ou l'agent ne joint pas l'API : vérifier DHCP, TFTP et les ports 6385 et 9999.}
+  {D}
+  {Dans \texttt{wait call-back}, Ironic attend que l'agent du ramdisk rappelle l'API. Le blocage vient donc d'un serveur qui ne démarre pas le ramdisk (DHCP, TFTP, ordre de démarrage) ou d'un agent qui ne joint pas l'API (ports 6385 et 9999). Un échec de nettoyage donne \texttt{clean failed}, un BMC injoignable met le nœud en maintenance avec \texttt{power failure}, et Nova a de toute façon déjà choisi le nœud.}
+  {\qrt{tab:ir-pannes} et \qrf{fig:ir-seq}}
+
+% --- Q7 (a) : durée du nettoyage
+\qcmq{a}{Des nœuds dont les disques ne permettent pas l'effacement sécurisé matériel restent des heures en \texttt{cleaning} après chaque instance. Quelle étape de nettoyage l'explique le mieux ?}
+  {\texttt{erase\_devices}, qui écrase les disques à défaut d'effacement matériel.}
+  {\texttt{erase\_devices\_metadata}, qui détruit seulement les métadonnées du disque.}
+  {\texttt{erase\_devices\_express}, qui s'appuie sur l'effacement matériel si possible.}
+  {L'écriture de l'image sur le disque par l'agent, pendant l'état \texttt{deploying}.}
+  {A}
+  {L'étape \texttt{erase\_devices} effectue un effacement sécurisé matériel quand le disque le permet ; sinon, selon la configuration, elle écrase le disque, ce qui prend des heures, voire des jours. La destruction des métadonnées ne dure que de quelques secondes à quelques minutes, la variante express est courte et désactivée par défaut, et l'écriture de l'image relève du déploiement, non du nettoyage.}
+  {\qrt{tab:ir-nettoyage} et \qr{sec:ir-nettoyage}}
+
+% --- Q8 (m) : synthèse, A, B et D
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {Les états stables ne changent que sur requête de l'API, alors que les états transitoires, comme \texttt{cleaning}, sont pilotés par le conductor.}
+  {Chaque conductor gère une partie des nœuds, répartie par un anneau de hachage ; on en ajoute quand le nombre de nœuds croît.}
+  {Après \texttt{provide}, un nœud passe directement de \texttt{manageable} à \texttt{available} : le nettoyage n'a lieu qu'à la suppression d'une instance.}
+  {Avec l'interface réseau \texttt{neutron}, le nœud passe du réseau de nettoyage au réseau de provisionnement, puis au réseau du locataire.}
+  {A, B, D}
+  {Les états stables n'évoluent que sur requête de l'API, les états transitoires sont pilotés par le conductor. Chaque conductor gère une partie des nœuds, distribuée par un anneau de hachage, d'où l'ajout de conductors quand les nœuds se multiplient. Avec l'interface \texttt{neutron}, le nœud passe du réseau de nettoyage à celui de provisionnement, puis à celui du locataire. En revanche, \texttt{provide} lance le nettoyage automatique, qui s'exécute aussi lors du premier passage de \texttt{manageable} à \texttt{available}.}
+  {\qr{sec:ir-archi}, \qr{sec:ir-etats} et \qr{sec:ir-reseau}}
+
+% QCM du chapitre Magnum
+\qcmchap{chap:magnum}{Magnum : Kubernetes managé}
+
+\qcmq{f}{Quel est le rôle de Magnum dans OpenStack ?}
+  {Déployer les services d'OpenStack eux-mêmes sur un cluster Kubernetes existant.}
+  {Offrir des bases de données à la demande, chacune dans une instance de Nova, avec leurs sauvegardes.}
+  {Fournir des clusters Kubernetes comme ressource du cloud, commandés par l'API d'OpenStack.}
+  {Répartir le trafic des applications entre plusieurs machines virtuelles du cloud.}
+  {C}
+  {Magnum est le service de gestion d'infrastructure de conteneurs : il fournit des clusters Kubernetes comme ressource du cloud, construits sur les machines, les réseaux et les volumes d'OpenStack. Il fait donc l'inverse d'un déploiement d'OpenStack sur Kubernetes ; les bases de données relèvent de Trove et la répartition de charge d'Octavia.}
+  {\qr{sec:ma-role} et \qrf{fig:ma-env}}
+
+\qcmq{f}{Dans le vocabulaire de Magnum, qu'est-ce qu'un modèle de cluster (\emph{cluster template}) ?}
+  {Une description réutilisable (COE, image, réseau externe, flavors) dont chaque cluster est une instance.}
+  {Le code qui exécute les opérations d'un cluster pour un triplet (type de serveur, système, COE).}
+  {Un paramètre \texttt{clé=valeur} qui règle une fonction du cluster, comme l'activation d'un add-on.}
+  {Un ensemble de nœuds de même rôle, de même flavor et de même image, comme le groupe \texttt{default-worker}.}
+  {A}
+  {Magnum sépare la description d'un cluster, réutilisable, de sa création : le modèle fixe le COE, l'image, le réseau externe et les flavors, et le cluster en est une instance. Les trois autres définitions sont celles d'un groupe de nœuds, d'un pilote de cluster et d'un label.}
+  {\qrt{tab:ma-objets} et \qr{sec:ma-concepts}}
+
+\qcmq{f}{Dans l'architecture de Magnum, quel composant exécute une opération en appelant le pilote de cluster adapté ?}
+  {L'API (\texttt{magnum-api}), qui valide la requête puis appelle elle-même le pilote.}
+  {Le conductor (\texttt{magnum-conductor}), qui reçoit l'opération par la file de messages.}
+  {Le client \texttt{python-magnumclient}, greffon de la commande \texttt{openstack}.}
+  {Le greffon \texttt{magnum-ui}, qui agit sur les ressources du cluster depuis Horizon.}
+  {B}
+  {L'API valide la requête, l'enregistre dans la base et la transmet au conductor par la file de messages ; c'est le conductor qui l'exécute en appelant le pilote de cluster. Le client en ligne de commande et le greffon d'Horizon ne sont que des interfaces d'accès.}
+  {\qr{sec:ma-archi} et \qrt{tab:ma-composants}}
+
+\qcmq{i}{Pour un cluster créé avec le pilote \texttt{k8s\_capi\_helm}, que contient le champ \texttt{stack\_id} ?}
+  {L'identifiant d'une stack Heat créée pour ce cluster.}
+  {L'identifiant de la machine virtuelle du premier nœud maître.}
+  {L'identifiant du projet Keystone, sans tirets, qui sert à nommer l'espace de noms.}
+  {Le nom de la release Helm installée pour ce cluster dans le cluster de gestion.}
+  {D}
+  {Avec \texttt{k8s\_capi\_helm}, le pilote installe une release Helm par cluster dans le cluster de gestion et en garde le nom dans \texttt{stack\_id}. Seul le pilote Heat historique y met une stack Heat. L'identifiant du projet intervient autrement : il sert à nommer l'espace de noms du projet dans le cluster de gestion.}
+  {\qr{sec:ma-pilotes} et \qrf{fig:ma-pilotes}}
+
+\qcmq{i}{Avec \texttt{k8s\_capi\_helm}, qu'est-ce qui fait passer un cluster de \texttt{CREATE\_IN\_PROGRESS} à \texttt{CREATE\_COMPLETE} ?}
+  {Un appel de l'opérateur CAPO à l'API de Magnum, dès que la dernière machine a démarré.}
+  {Une tâche périodique du conductor, qui lit l'état des ressources dans le cluster de gestion.}
+  {L'API de Magnum, dès qu'elle a transmis la demande de création au conductor.}
+  {La fin de la stack Heat du cluster, dont le conductor reçoit alors l'événement.}
+  {B}
+  {La création est asynchrone : l'API répond aussitôt par l'identifiant du cluster. CAPO construit l'infrastructure et les machines démarrent, puis une tâche périodique du conductor vient lire l'état des ressources et fait passer le cluster à \texttt{CREATE\_COMPLETE}. La stack Heat n'existe que dans l'ancien pilote.}
+  {\qrf{fig:ma-seq} et \qr{sec:ma-archi}}
+
+\qcmq{a}{Un cluster \texttt{k8s\_capi\_helm} n'a que deux machines sur les trois voulues et reste figé en \texttt{CREATE\_IN\_PROGRESS} depuis la veille. Où se trouve le plus probablement l'explication ?}
+  {Dans la stack Heat du cluster, que l'on interroge avec \texttt{openstack stack failures list} pour voir la ressource en échec.}
+  {Dans le conductor, dont la tâche périodique s'est arrêtée : redémarrer ce service suffit à débloquer le cluster.}
+  {Dans le cluster de gestion, où l'opérateur réessaie sans fin et où \texttt{kubectl describe} montre le refus d'OpenStack.}
+  {Dans un délai d'attente du pilote : une fois ce délai écoulé, le cluster passera de lui-même en \texttt{CREATE\_FAILED}.}
+  {C}
+  {Avec Cluster API, l'opérateur réessaie sans fin : le pilote ne sait que passer de \texttt{\_IN\_PROGRESS} à \texttt{\_COMPLETE}, si bien qu'un cluster qui ne se construit pas reste en cours au lieu de passer en \texttt{\_FAILED}. La cause (quota, flavor, image, réseau) se lit dans les ressources du cluster de gestion ; la liste des échecs d'une stack Heat ne vaut que pour l'ancien pilote. Ici une machine manque : c'est la construction qui est bloquée, et non le suivi du statut par le conductor.}
+  {\qr{sec:ma-cycle} et \qrt{tab:ma-pannes}}
+
+\qcmq{a}{Un administrateur passe du pilote Heat historique à \texttt{k8s\_capi\_helm}. Pour que le cluster puisse appeler les API d'OpenStack (volumes, répartiteurs), quel changement d'identité observe-t-il ?}
+  {Barbican remplace Keystone pour authentifier les appels que le cluster adresse aux API d'OpenStack.}
+  {Le compte de service \texttt{magnum} du projet \texttt{service} signe désormais tous les appels du cluster.}
+  {Le cluster n'a plus d'identité propre : chaque appel réutilise le token de l'utilisateur, renouvelé par le conductor.}
+  {Un application credential, gardé dans un secret du cluster de gestion, remplace le trust et l'utilisateur délégué.}
+  {D}
+  {Le pilote \texttt{k8s\_capi\_helm} crée un application credential de l'utilisateur, stocké dans un secret du cluster de gestion. L'ancien pilote Heat s'appuyait sur un trust et sur un utilisateur délégué dans un domaine dédié. Barbican ne conserve que les certificats du cluster, pas son identité.}
+  {\qr{sec:ma-reseau} et \qr{sec:ma-pilotes}}
+
+\qcmq{m}{Parmi les affirmations suivantes sur Magnum, lesquelles sont exactes ?}
+  {Les certificats d'un cluster peuvent être conservés dans Barbican, ce qui est recommandé en production, ou dans la base de Magnum.}
+  {Les anciens pilotes Swarm et Mesos restent pris en charge, à côté de Kubernetes, pour les clusters qui les utilisent déjà.}
+  {On peut ajouter un groupe de nœuds de workers avec \texttt{coe nodegroup create}, mais pas un groupe de nœuds maîtres.}
+  {Les volumes persistants des applications viennent de Swift, par un pilote de stockage installé dans le cluster.}
+  {A, C}
+  {Les certificats sont conservés dans Barbican (recommandé en production) ou, sinon, dans la base de Magnum, et les groupes de maîtres ne peuvent pas être créés avec \texttt{nodegroup create}. À l'inverse, seul Kubernetes reste pris en charge : Swarm et Mesos ont été retirés. Les volumes persistants viennent de Cinder, par le pilote CSI de Cinder, et non de Swift.}
+  {\qr{sec:ma-reseau}, \qrt{tab:ma-operations} et \qr{sec:ma-role}}
+
+% QCM du chapitre Trove
+\qcmchap{chap:trove}{Trove : les bases de données en tant que service}
+
+\qcmq{f}{Quel service Trove apporte-t-il à ses utilisateurs ?}
+  {Des machines virtuelles livrées avec un moteur de base de données, dont l'utilisateur assure lui-même les sauvegardes.}
+  {Des bases MySQL, MariaDB ou PostgreSQL comme service du cloud, avec sauvegardes et réplication prises en charge.}
+  {Des clusters Kubernetes sur lesquels tourne un opérateur de base de données.}
+  {Un répartiteur de charge placé devant les bases de données déjà installées par les utilisateurs.}
+  {B}
+  {Trove est le service Database d'OpenStack, un DBaaS : l'utilisateur commande une instance MySQL, MariaDB ou PostgreSQL, et Trove s'occupe de la machine, du volume, du réseau, de la configuration, des sauvegardes et de la réplication. Une simple machine virtuelle avec MySQL laisse ces tâches à l'utilisateur ; c'est précisément ce que Trove automatise.}
+  {\qr{sec:tr-role} et \qrf{fig:tr-env}}
+
+\qcmq{f}{Quel composant de Trove reçoit les mises à jour d'état envoyées par les instances (statut, avancement d'une sauvegarde) et les inscrit dans la base de Trove ?}
+  {L'agent invité (\texttt{trove-guestagent}).}
+  {Le taskmanager (\texttt{trove-taskmanager}).}
+  {L'API (\texttt{trove-api}).}
+  {Le conductor (\texttt{trove-conductor}).}
+  {D}
+  {Les agents n'accèdent jamais à la base de Trove : ils envoient leurs mises à jour au conductor, qui les y inscrit. Le taskmanager crée la machine, le volume et les ports et ordonne les opérations, l'API valide puis transmet, et l'agent s'exécute dans l'instance.}
+  {\qrt{tab:tr-composants} et \qr{sec:tr-archi}}
+
+\qcmq{f}{À quoi sert un groupe de configuration dans Trove ?}
+  {À réserver un réseau pour les échanges entre le plan de contrôle et l'agent de chaque instance.}
+  {À décrire un type de base proposé aux utilisateurs, avec ses versions et l'image associée.}
+  {À appliquer un même jeu de paramètres du moteur à une ou plusieurs instances.}
+  {À copier une instance dans un conteneur Swift pour pouvoir la restaurer plus tard.}
+  {C}
+  {Un groupe de configuration est un jeu de paramètres du moteur, rattaché (\texttt{attach}) à une ou plusieurs instances. Les trois autres définitions sont celles du réseau de gestion, du datastore et de la sauvegarde.}
+  {\qrt{tab:tr-objets} et \qr{sec:tr-config}}
+
+\qcmq{i}{Trove suit chaque instance par deux états. Quelle affirmation les distingue correctement ?}
+  {Le \texttt{status} reflète la machine et la tâche en cours ; l'\texttt{operating\_status} est l'état réel du moteur, surveillé par l'agent.}
+  {Le \texttt{status} reflète l'état du moteur de base de données ; l'\texttt{operating\_status} reflète la machine et la tâche en cours.}
+  {Le \texttt{status} est visible de l'utilisateur ; l'\texttt{operating\_status} est réservé à l'administrateur du cloud.}
+  {Le \texttt{status} concerne le volume de données ; l'\texttt{operating\_status} concerne le réseau de l'instance.}
+  {A}
+  {Une instance \texttt{ACTIVE} n'est pas forcément utilisable : il faut attendre \texttt{HEALTHY}, l'état du moteur que l'agent surveille et signale. Les deux rôles ne sont donc pas permutables, et aucun des deux champs n'est réservé à l'administrateur ni lié au volume ou au réseau.}
+  {\qr{sec:tr-cycle} et \qrt{tab:tr-statuts}}
+
+\qcmq{i}{Dans quel ordre de priorité décroissante Trove choisit-il le conteneur Swift d'une sauvegarde ?}
+  {Configuration de Trove, puis stratégie de sauvegarde, puis choix fait à la création de la sauvegarde.}
+  {Stratégie de sauvegarde, puis choix fait à la création de la sauvegarde, puis configuration de Trove.}
+  {Choix fait à la création de la sauvegarde, puis configuration de Trove, puis stratégie de sauvegarde.}
+  {Choix fait à la création de la sauvegarde, puis stratégie de sauvegarde, puis configuration de Trove.}
+  {D}
+  {Le choix fait à la création de la sauvegarde l'emporte ; à défaut, la stratégie de sauvegarde (d'un projet ou d'une instance) fixe le conteneur ; en dernier recours, la configuration de Trove s'applique, avec \texttt{database\_backups} par défaut.}
+  {\qr{sec:tr-backup}}
+
+\qcmq{a}{Un primaire A a deux répliques saines, B et C. L'opérateur exécute \texttt{instance promote} sur B. Que devient A ?}
+  {A est supprimée, puisque Trove ne conserve qu'un seul primaire à la fois dans le groupe.}
+  {A devient à son tour une réplique de B, comme C ; les trois instances repassent ensuite à \texttt{HEALTHY}.}
+  {A est détachée et reste un serveur autonome, qui ne redevient jamais réplique.}
+  {A reste primaire, et B devient un second primaire qui accepte lui aussi les écritures.}
+  {B}
+  {Dans la figure, la promotion de B fait de B le primaire, et A comme C deviennent ses répliques ; les trois instances passent par \texttt{PROMOTE} puis reviennent à \texttt{HEALTHY}. Rien n'est supprimé, et seul \texttt{detach} fait d'une réplique un serveur autonome. Aucune bascule n'est automatique : l'opérateur lance la commande, puis oriente les applications.}
+  {\qrf{fig:tr-repl} et \qr{sec:tr-replication}}
+
+\qcmq{a}{Avec \texttt{network\_isolation} actif, de nouvelles instances n'arrivent plus à tirer l'image Docker de leur moteur. Quelle explication est cohérente avec le chapitre ?}
+  {La machine n'a plus que l'interface de gestion, sans route par défaut : ce réseau doit donner accès au registre Docker.}
+  {L'interface du réseau de gestion est retirée de la machine, qui ne joint donc plus le contrôleur.}
+  {Le NAT de Docker, supprimé par l'isolation, était le seul chemin du conteneur vers le registre public.}
+  {Le port 22 du groupe de sécurité de gestion est désormais fermé, alors qu'il sert à tirer l'image du moteur.}
+  {A}
+  {Avec l'isolation, la machine perd son interface côté utilisateur : elle n'a plus que celle de gestion, sans route par défaut, et le trafic du client rejoint directement le conteneur. Le réseau de gestion doit donc donner accès à RabbitMQ et au registre Docker. Le port 22 ne sert qu'au diagnostic.}
+  {\qr{sec:tr-secu} et \qrf{fig:tr-reseau}}
+
+\qcmq{m}{Parmi les affirmations suivantes sur Trove, lesquelles sont exactes ?}
+  {Le code actuel de l'agent invité prend encore en charge des moteurs NoSQL, comme MongoDB ou Cassandra.}
+  {Depuis Victoria, une même image invitée de Glance sert tous les moteurs, qui viennent d'images Docker.}
+  {Pour le chiffrement TLS d'une instance, le certificat est conservé dans Swift, avec les sauvegardes.}
+  {Les quotas d'instances, de volumes et de sauvegardes sont propres à Trove, et non à Keystone.}
+  {B, D}
+  {Depuis Victoria, le moteur vient d'une image Docker dont l'étiquette est le numéro de version du datastore, donc une seule image invitée suffit. Les quotas d'instances, de volumes et de sauvegardes sont propres à Trove. En revanche, le code de l'agent ne contient plus que MySQL, MariaDB et PostgreSQL, et les certificats TLS sont conservés dans Barbican, pas dans Swift.}
+  {\qr{sec:tr-datastores} et \qrt{tab:tr-secu}}
+
+% QCM du chapitre Méthodes de déploiement d'OpenStack
+\qcmchap{chap:deploiement}{Méthodes de déploiement d'OpenStack}
+
+\qcmq{f}{Sur quelle infrastructure partagée reposent tous les services OpenStack, quelle que soit la méthode de déploiement ?}
+  {Un orchestrateur de conteneurs, un registre d'images et un annuaire LDAP.}
+  {Un cluster Ceph, un serveur Prometheus et un tableau de bord Grafana.}
+  {Un serveur Ansible, un dépôt Git et un hôte de déploiement dédié.}
+  {Une base SQL, une file de messages et un cache (memcached).}
+  {D}
+  {Chaque service a son code, ses processus et son fichier de configuration, mais tous reposent sur la même infrastructure : une base SQL, une file de messages et un cache memcached. Ceph, la supervision et Ansible relèvent de choix d'exploitation ou d'outillage, et non de l'infrastructure commune.}
+  {\qr{sec:dep-pourquoi} et \qrf{fig:dep-pile}}
+
+\qcmq{f}{À quoi DevStack est-il destiné ?}
+  {À héberger un cloud de production sur trois contrôleurs, avec haute disponibilité et mises à niveau automatisées.}
+  {À déployer vite un cloud complet sur une seule machine jetable, pour développer, tester et apprendre.}
+  {À installer OpenStack sur plusieurs nœuds avec Ansible, à partir d'images de conteneurs publiées.}
+  {À déployer OpenStack sur un cluster Kubernetes existant, avec des charts Helm.}
+  {B}
+  {DevStack est une série de scripts qui installent un cloud OpenStack complet sur une seule machine dédiée, depuis les dépôts Git des projets : il sert à développer, tester et apprendre, pas à héberger un service réel. Il n'offre pas de haute disponibilité ; les images de conteneurs relèvent de Kolla-Ansible et les charts Helm d'OpenStack-Helm.}
+  {\qr{sec:dep-devstack} et \qrf{fig:dep-devstack}}
+
+\qcmq{f}{Quelle est la différence entre Kolla et Kolla-Ansible ?}
+  {Kolla déploie les conteneurs sur les nœuds de l'inventaire, tandis que Kolla-Ansible construit les images de chaque service.}
+  {Kolla ajoute la configuration des hôtes et le provisionnement du matériel à Kolla-Ansible.}
+  {Kolla construit les images de conteneurs de chaque service ; Kolla-Ansible fournit les playbooks Ansible qui les déploient.}
+  {Kolla s'installe sur les nœuds de calcul, tandis que Kolla-Ansible s'installe sur les contrôleurs.}
+  {C}
+  {Le projet Kolla construit les images de conteneurs (\texttt{kolla-build}) ; Kolla-Ansible fournit les playbooks Ansible qui déploient ces images sur les nœuds. La configuration des hôtes et le provisionnement du matériel sont ajoutés par Kayobe, et non par Kolla.}
+  {\qr{sec:dep-kolla} et \qrt{tab:dep-outils}}
+
+\qcmq{i}{Quelle affirmation distingue correctement Kolla-Ansible d'OpenStack-Ansible ?}
+  {Kolla-Ansible lance un conteneur d'application par service, depuis une image ; OpenStack-Ansible installe depuis les sources, dans des conteneurs LXC.}
+  {Kolla-Ansible installe les services depuis les sources dans des environnements Python ; OpenStack-Ansible lance des conteneurs Docker depuis des images.}
+  {Kolla-Ansible vise l'essai et le développement ; OpenStack-Ansible vise la production sur plusieurs nœuds.}
+  {Kolla-Ansible repose sur Ansible, tandis qu'OpenStack-Ansible repose sur Puppet pour configurer les nœuds.}
+  {A}
+  {Les deux outils reposent sur Ansible et visent la production, mais ils isolent les services différemment : Kolla-Ansible les exécute chacun dans un conteneur d'application créé à partir d'une image figée, OpenStack-Ansible les installe depuis les sources dans des environnements virtuels Python, au sein de conteneurs LXC « machine ». Les trois autres affirmations inversent les modes d'installation ou se trompent d'usage et d'outil.}
+  {\qr{sec:dep-osa}, \qrf{fig:dep-osa} et \qr{sec:dep-choix}}
+
+\qcmq{i}{OpenStack-Helm et Magnum font tous deux intervenir OpenStack et Kubernetes. Quelle affirmation les distingue correctement ?}
+  {OpenStack-Helm fournit des clusters Kubernetes aux utilisateurs d'OpenStack ; Magnum déploie OpenStack lui-même sur Kubernetes.}
+  {OpenStack-Helm sert à l'essai sur une seule machine ; Magnum sert à la production sur plusieurs nœuds.}
+  {OpenStack-Helm et Magnum déploient tous deux les services d'OpenStack sur Kubernetes, avec des outils différents.}
+  {OpenStack-Helm installe OpenStack sur Kubernetes ; Magnum fait l'inverse, en fournissant des clusters Kubernetes sur OpenStack.}
+  {D}
+  {OpenStack-Helm est une collection de charts Helm qui déploient OpenStack sur Kubernetes, pour une équipe qui exploite déjà Kubernetes. Magnum fait l'inverse : c'est un service du cloud qui fournit des clusters Kubernetes sur les machines, les réseaux et les volumes d'OpenStack.}
+  {\qr{sec:dep-autres} et \qr{sec:ma-role}}
+
+\qcmq{a}{Un cloud a trois contrôleurs (HAProxy, keepalived, Galera, RabbitMQ). Un hyperviseur tombe en pleine journée. Que se passe-t-il pour les machines virtuelles des utilisateurs qui y tournaient ?}
+  {Keepalived les redémarre automatiquement sur d'autres hyperviseurs, en déplaçant l'adresse virtuelle du plan de contrôle.}
+  {Elles ne sont pas relancées seules : la haute disponibilité ne les protège pas, et l'on évacue les instances avec \texttt{openstack server evacuate}.}
+  {Nova les relance automatiquement sur un autre hyperviseur, puisque le quorum des trois contrôleurs est maintenu.}
+  {Galera réplique leurs disques entre les hyperviseurs, si bien qu'elles repartent seules, sans intervention de l'administrateur.}
+  {B}
+  {La haute disponibilité décrite concerne le plan de contrôle : services sans état derrière HAProxy et une adresse virtuelle que keepalived déplace, services à état en cluster avec quorum. Elle ne protège pas les machines des utilisateurs : si un hyperviseur tombe, Nova ne les relance pas seul et l'administrateur les évacue.}
+  {\qr{sec:dep-exploitation}}
+
+\qcmq{a}{Un cloud tourne en 2025.1 (version SLURP). L'équipe cherche la version la plus récente qu'elle puisse atteindre en une seule mise à niveau. Quelle cible et quelle justification sont exactes ?}
+  {2025.2, car une version SLURP ne se met à niveau que vers la version qui la suit.}
+  {2026.2, car on peut franchir deux versions semestrielles dès que la version de départ est SLURP.}
+  {2026.1, car on passe directement d'une version SLURP à la version SLURP suivante.}
+  {2027.1, car deux sauts SLURP consécutifs ne comptent que pour une seule mise à niveau.}
+  {C}
+  {Une version sur deux, la première de l'année, est SLURP : on passe directement de l'une à la suivante (2025.1 vers 2026.1). C'est une version intermédiaire comme 2025.2 qui ne se met à niveau que vers celle qui la suit. Atteindre 2026.2 ou 2027.1 demande donc au moins deux mises à niveau successives.}
+  {\qr{sec:dep-exploitation} et \qrf{fig:dep-slurp}}
+
+\qcmq{m}{Parmi les affirmations suivantes, lesquelles sont exactes ?}
+  {Pour les composants à état comme Galera ou RabbitMQ, deux instances n'apportent aucune haute disponibilité : la panne de l'une paralyse l'autre.}
+  {L'installation manuelle n'est pas idempotente : relancer une commande qui a déjà réussi échoue ou duplique le résultat.}
+  {En production, l'hôte de déploiement est de préférence l'un des contrôleurs du cloud, qui dispose déjà d'Ansible.}
+  {Une sauvegarde utile couvre la base de chaque service, la configuration de l'outil et les mots de passe, et se vérifie par une restauration d'essai.}
+  {A, B, D}
+  {Les composants à état imposent un quorum : deux instances ne suffisent pas, trois tolèrent une panne. L'installation manuelle n'a aucune idempotence, ce qui la rend intenable au-delà d'un laboratoire. La sauvegarde doit couvrir bases, configuration de l'outil et mots de passe, et être restaurée lors d'un exercice. En revanche, l'hôte de déploiement est en production une machine distincte du cloud.}
+  {\qr{sec:dep-anatomie}, \qr{sec:dep-manuel} et \qr{sec:dep-exploitation}}
+
+% =====================================================================
+%  Bilan, puis corrigés
+% =====================================================================
+\clearpage
+\phantomsection
+\subsection*{Bilan}
+Après la correction, reporter ici le score de chaque chapitre (sur 17) et cocher le bilan : à revoir de 0 à 8 points, acquis de 9 à 13,
+maîtrisé de 14 à 17.\label{qcm:finq}
+
+\qcmbilan
+
+\clearpage
+\phantomsection
+\section*{QCM : corrigés}\label{qcm:corr}
+\addcontentsline{toc}{section}{QCM : corrigés}
+
+Les bonnes réponses des 120 questions sont d'abord rassemblées dans le tableau ci-dessous ; les corrigés détaillés suivent, chapitre
+par chapitre. Chaque corrigé donne la ou les bonnes réponses, explique pourquoi, et indique le passage du cours à relire.
+
+\qcmanswertable
+\qcmprintallcorr
