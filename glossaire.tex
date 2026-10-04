@@ -378,3 +378,71 @@
 
 \newglossaryentry{etatprov}{name={état de provisionnement (provision state)}, sort={etat de provisionnement}, text={état de provisionnement}, plural={états de provisionnement},
   description={Étape du cycle de vie d'un nœud dans la machine à états d'Ironic (\texttt{enroll}, \texttt{manageable}, \texttt{available}, \texttt{active}\dots)}}
+
+% ---- Magnum -----------------------------------------------------------
+\newglossaryentry{coe}{name={COE (moteur d'orchestration de conteneurs)}, sort={COE}, text={COE},
+  description={\emph{Container Orchestration Engine} : logiciel qui déploie et supervise des conteneurs sur un ensemble de machines ; Kubernetes est le seul que Magnum prenne encore en charge}}
+
+\newglossaryentry{kubernetes}{name={Kubernetes}, sort={Kubernetes},
+  description={Orchestrateur de conteneurs libre : il place les conteneurs sur les machines d'un cluster, les relance en cas de panne et ajuste leur nombre ; c'est le moteur que Magnum fournit}}
+
+\newglossaryentry{clustertemplate}{name={modèle de cluster (cluster template)}, sort={modele de cluster}, text={modèle de cluster}, plural={modèles de cluster},
+  description={Description réutilisable d'un cluster de Magnum : moteur d'orchestration, image des nœuds, réseau externe, flavors, pilote réseau et labels ; on crée les clusters à partir d'elle}}
+
+\newglossaryentry{clustermagnum}{name={cluster (Magnum)}, sort={cluster (Magnum)}, text={cluster}, plural={clusters},
+  description={Ensemble de machines qui forment un cluster Kubernetes, créé par Magnum à partir d'un modèle ; il a un statut, une adresse d'API et des groupes de nœuds}}
+
+\newglossaryentry{nodegroup}{name={groupe de nœuds (node group)}, sort={groupe de noeuds}, text={groupe de nœuds}, plural={groupes de nœuds},
+  description={Ensemble de nœuds d'un cluster de Magnum qui partagent un rôle, un flavor et une image ; tout cluster a les groupes \texttt{default-master} et \texttt{default-worker}}}
+
+\newglossaryentry{pilotecluster}{name={pilote de cluster (cluster driver)}, sort={pilote de cluster}, text={pilote de cluster}, plural={pilotes de cluster},
+  description={Code de Magnum qui construit et fait évoluer les clusters d'un type donné (type de serveur, système d'exploitation, moteur d'orchestration) ; le conductor l'appelle pour chaque opération}}
+
+\newglossaryentry{clusterapi}{name={Cluster API (CAPI)}, sort={Cluster API}, text={Cluster API},
+  description={Projet de Kubernetes qui décrit des clusters par des ressources Kubernetes et les construit sur une infrastructure par l'intermédiaire de fournisseurs ; celui d'OpenStack est CAPO}}
+
+\newglossaryentry{clustergestion}{name={cluster de gestion (management cluster)}, sort={cluster de gestion}, text={cluster de gestion},
+  description={Cluster Kubernetes où tourne Cluster API : il contient les ressources qui décrivent les autres clusters, dits de charge de travail, et les opérateurs qui les construisent}}
+
+\newglossaryentry{crd}{name={CRD (ressource personnalisée)}, sort={CRD}, text={CRD},
+  description={\emph{Custom Resource Definition} : extension de l'API de Kubernetes qui ajoute un type de ressource ; Cluster API en définit pour les clusters, les machines et leurs paramètres}}
+
+\newglossaryentry{helm}{name={Helm}, sort={Helm},
+  description={Gestionnaire de paquets de Kubernetes : un \emph{chart} regroupe des modèles de ressources, et une \emph{release} est l'installation d'un chart avec des valeurs données}}
+
+% ---- Trove ------------------------------------------------------------
+\newglossaryentry{dbaas}{name={DBaaS}, sort={DBaaS}, text={DBaaS},
+  description={\emph{Database as a Service} : base de données fournie à la demande, dont le fournisseur (ici Trove) gère l'installation, les sauvegardes, la réplication et les mises à jour}}
+
+\newglossaryentry{datastore}{name={datastore}, sort={datastore}, plural={datastores},
+  description={Type de base de données proposé par Trove (par exemple MySQL ou PostgreSQL) ; l'administrateur du cloud le crée, avec ses versions}}
+
+\newglossaryentry{versiondatastore}{name={version de datastore}, sort={version de datastore}, text={version de datastore}, plural={versions de datastore},
+  description={Version d'un moteur (par exemple 8.4), liée à une image Glance par son identifiant ou par des étiquettes ; son numéro est l'étiquette de l'image Docker du moteur}}
+
+\newglossaryentry{instancebdd}{name={instance de base de données}, sort={instance de base de donnees}, text={instance de base de données}, plural={instances de base de données},
+  description={Base déployée par Trove : une machine Nova, un volume Cinder et un moteur dans un conteneur ; à ne pas confondre avec l'instance de Nova qui l'héberge}}
+
+\newglossaryentry{groupeconfig}{name={groupe de configuration (configuration group)}, sort={groupe de configuration}, text={groupe de configuration}, plural={groupes de configuration},
+  description={Jeu de paramètres du moteur de base de données, validés d'après la version du datastore, qu'on applique à une ou plusieurs instances}}
+
+\newglossaryentry{replique}{name={réplique (replica)}, sort={replique}, text={réplique}, plural={répliques},
+  description={Instance en lecture seule alimentée de façon asynchrone par une instance primaire ; elle répartit les lectures et peut être promue primaire}}
+
+\newglossaryentry{reseaugestion}{name={réseau de gestion}, sort={reseau de gestion}, text={réseau de gestion},
+  description={Réseau invisible des utilisateurs qui relie chaque instance de Trove à la file de messages du plan de contrôle ; l'agent invité y initie lui-même ses connexions}}
+
+\newglossaryentry{imageinvitee}{name={image invitée (guest image)}, sort={image invitee}, text={image invitée}, plural={images invitées},
+  description={Image Glance de la machine d'une instance de Trove : un système (Ubuntu), Docker et l'agent invité ; une seule image sert tous les moteurs depuis Victoria}}
+
+\newglossaryentry{conteneurlinux}{name={conteneur (Linux)}, sort={conteneur (Linux)}, text={conteneur}, plural={conteneurs},
+  description={Processus isolé du reste du système par les fonctions du noyau Linux, avec son propre système de fichiers ; Docker en est un moteur courant}}
+
+\newglossaryentry{statutexploitation}{name={statut d'exploitation (operating status)}, sort={statut d'exploitation}, text={statut d'exploitation},
+  description={Champ \texttt{operating\_status} d'une instance de Trove : état réel du moteur, relevé par l'agent invité (\texttt{HEALTHY} ou \texttt{SHUTDOWN}), distinct du \texttt{status} de la machine}}
+
+\newglossaryentry{tls}{name={TLS}, sort={TLS},
+  description={\emph{Transport Layer Security} : protocole qui chiffre une connexion réseau et authentifie son serveur, voire son client ; Trove peut l'imposer aux connexions vers la base}}
+
+\newglossaryentry{operateurk8s}{name={opérateur Kubernetes}, sort={operateur Kubernetes}, text={opérateur Kubernetes}, plural={opérateurs Kubernetes},
+  description={Logiciel qui s'exécute dans un cluster Kubernetes et y automatise l'exploitation d'une application à état, par exemple le déploiement, les sauvegardes et la bascule d'une base de données}}

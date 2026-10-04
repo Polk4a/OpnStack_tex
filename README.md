@@ -6,10 +6,11 @@ glossaire, bibliographie biblatex/APA. **Un chapitre = un fichier `chap_<nom>.te
 **Avancement :** introduction/présentation (squelette), **Keystone** (complet, ~39 pages),
 **Nova** (8 pages), **Placement** (7 pages), **Glance** (7 pages), **Neutron** (8 pages),
 **Cinder** (9 pages), **Horizon** (9 pages), **Octavia** (9 pages), **Swift** (8 pages), **Heat** (9 pages)
-et **Ironic** (10 pages) rédigés. Les autres chapitres de service (Magnum, Trove, déploiement) et la
-conclusion sont encore vides (titre + `\label`) ; ils seront rédigés selon les mêmes règles
-(voir « Conventions des chapitres rédigés »). Keystone est le chapitre « exhaustif » ; les
-suivants sont plus synthétiques (10 pages au plus, schémas conservés).
+**Ironic** (10 pages), **Magnum** (9 pages) et **Trove** (12 pages) rédigés. Les chapitres restants
+(déploiement) et la conclusion sont encore vides (titre + `\label`) ; ils seront rédigés selon les
+mêmes règles (voir « Conventions des chapitres rédigés »). Keystone est le chapitre « exhaustif » ;
+les suivants sont plus synthétiques (10 pages au plus, schémas conservés) ; Trove, plus détaillé
+(sauvegardes, réplication, sécurité), peut aller jusqu'à 15 pages.
 
 ## Compilation
 
@@ -30,7 +31,7 @@ la compilation échoue sans lui).
 - `I do not know the key '/tikz/pcli'` : `main.tex` est une ancienne copie, sans le second
   `\tikzset{…}` (styles de schémas). Utiliser le `main.tex` du projet.
 - `Undefined control sequence \seqmsg` (ou `\seqrep`) : les chapitres Nova, Placement, Neutron,
-  Cinder, Horizon, Octavia, Swift, Heat et Ironic tracent leurs diagrammes de séquence avec ces deux macros, définies dans `main.tex` juste après
+  Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum et Trove tracent leurs diagrammes de séquence avec ces deux macros, définies dans `main.tex` juste après
   le second `\tikzset`. Si elles manquent, les ajouter :
 
 ```latex
@@ -63,12 +64,12 @@ chap_octavia.tex      9.  Octavia : répartition de charge  (RÉDIGÉ, 9 pages)
 chap_swift.tex        10. Swift : stockage objet  (RÉDIGÉ, 8 pages)
 chap_heat.tex         11. Heat : orchestration  (RÉDIGÉ, 9 pages)
 chap_ironic.tex       12. Ironic : bare metal  (RÉDIGÉ, 10 pages)
-chap_magnum.tex       13. Magnum : Kubernetes managé
-chap_trove.tex        14. Trove : bases de données (DBaaS)
+chap_magnum.tex       13. Magnum : Kubernetes managé  (RÉDIGÉ, 9 pages)
+chap_trove.tex        14. Trove : bases de données (DBaaS)  (RÉDIGÉ, 12 pages)
 chap_deploiement.tex  15. Méthodes de déploiement (hors service)
 conclusion.tex        Conclusion (non numérotée, vide)
-glossaire.tex         Entrées du glossaire (121 entrées : Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic)
-sources.bib           Bibliographie (155 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Trove)
+glossaire.tex         Entrées du glossaire (143 entrées : Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum, Trove)
+sources.bib           Bibliographie (192 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum, Trove)
 images/               logo_insa.png à y déposer
 ```
 
@@ -89,8 +90,8 @@ pour réordonner ou retirer un chapitre, déplacer ou supprimer une ligne.
 | Swift (rédigé) | Chapitre 3 partie 2 ; le reste vient de la documentation officielle de Swift |
 | Heat (rédigé) | Chapitre 3 partie 3 ; le reste vient de la documentation officielle de Heat |
 | Ironic (rédigé) | Chapitre 5 partie 2 ; le reste vient de la documentation officielle d'Ironic |
-| Magnum | Chapitre 5 partie 3 |
-| Trove | Chapitre 5 partie 4 ; présentation Trove (groupe 5) |
+| Magnum (rédigé) | Chapitre 5 partie 3 ; le reste vient de la documentation officielle de Magnum et de magnum-capi-helm |
+| Trove (rédigé) | Chapitre 5 partie 4 ; présentation Trove (groupe 5) ; le reste vient de la documentation officielle de Trove |
 | Déploiement | Chapitre 4 (DevStack, Kolla-Ansible, manuel/bare-metal) |
 
 ## Outils du template
@@ -141,13 +142,19 @@ près de leur texte, on peut les placer avec `\begin{table}[H]` (paquet `float`)
 exercice et son corrigé sur la même page, on peut les envelopper dans un `minipage` (chapitre Swift,
 exercice 10.3), mais pas si le corrigé contient un listing : le listing y est coupé par un trou
 (`correction` est un `tcolorbox` coupable). On insère alors un `\clearpage` avant la sous-section
-des exercices (chapitre Octavia).
+des exercices (chapitre Octavia) ; si cela laisse une page presque vide, on peut plutôt insérer un
+`\newpage` juste avant le seul corrigé concerné (chapitre Trove, exercice 14.2). Un listing long
+placé dans un `minipage` juste après des flottants qui remplissent la page provoque un
+`Overfull \vbox` : le placer après un paragraphe de texte (il passe alors en entier à la page
+suivante), ou ne pas le mettre dans un `minipage` (chapitre Trove, fichier `trove.conf`). Pour
+un paragraphe qui déborde à cause de noms de fichiers ou de sections en `\texttt`, on ajoute
+`\_\allowbreak` ou `\emergencystretch=3em` localement.
 
 ## Conventions des chapitres rédigés
 
 - Un chapitre = une `\section{…}\label{chap:<nom>}` ; sous-sections `sec:<nom>-<sujet>`,
   figures `fig:<nom>-…`, tableaux `tab:<nom>-…`, exercices `ex:<nom>-…`.
-- Chapitres synthétiques (Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic et suivants) : 10 pages au plus ; mêmes sections, mais
+- Chapitres synthétiques (Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum et suivants) : 10 pages au plus (Trove, chapitre plus détaillé : 15 au plus) ; mêmes sections, mais
   une figure par idée clé (environnement, architecture, séquence, ordonnancement/états), 3 exercices
   courts et un récapitulatif sans schéma de synthèse.
 - Contenu type : rôle du service et place dans OpenStack (schéma structure + interactions) ;

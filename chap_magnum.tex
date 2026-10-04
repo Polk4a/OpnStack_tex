@@ -2,10 +2,520 @@
 %  Chapitre « Magnum : Kubernetes managé »
 %  Fichier importé par main.tex avec \include{chap_magnum}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Services avancés » (chapitre 5, partie 3), documentation
+%  officielle de Magnum et des pilotes Cluster API (voir sources.bib).
+%  Écart avec le support : celui-ci décrit le pilote historique fondé sur Heat ;
+%  le chapitre le présente comme tel et décrit les pilotes Cluster API qui le remplacent.
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Magnum : Kubernetes managé}\label{chap:magnum}
+% =====================================================================
+
+Magnum fait d'un cluster Kubernetes une ressource du cloud : on le commande par l'API d'OpenStack, et il se construit sur les
+machines virtuelles, les réseaux et les volumes du cloud. Ce chapitre présente son rôle, ses concepts, son architecture, les
+deux générations de pilotes (le pilote historique fondé sur Heat et les pilotes Cluster API qui le remplacent), le cycle de
+vie d'un cluster, le réseau et la sécurité, puis la mise en œuvre \parencite{magnum-index}.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Magnum}\label{sec:ma-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Magnum}
+Magnum est le service de gestion d'infrastructure de conteneurs d'OpenStack : il fournit des clusters d'un moteur
+d'orchestration de conteneurs (\gls{coe}) comme ressource du cloud. Seul \gls{kubernetes} reste pris en charge ; les anciens
+pilotes Swarm et Mesos ont été retirés \parencite{magnum-user,magnum-source}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Offrir aux équipes applicatives un cluster Kubernetes prêt à l'emploi, sans qu'elles assemblent à
+        la main les machines, le réseau, les volumes et les certificats.
+  \item \textbf{Communique avec.} Keystone (authentification), Glance (images des nœuds), Nova, Neutron et Cinder (machines,
+        réseau, volumes), Octavia (répartiteur de l'API Kubernetes), Barbican (certificats), et un moteur qui construit
+        réellement le cluster : un cluster de gestion Cluster API, ou Heat pour l'ancien pilote
+        \parencite{magnum-user,magnum-capi-helm-user}.
+  \item \textbf{Exemple.} un modèle, un cluster, puis le fichier d'accès \texttt{kubeconfig} :
+\begin{lstlisting}[style=terminal]
+$ openstack coe cluster template create k8s-capi --coe kubernetes \
+    --image ubuntu-jammy-kube-v1.28.3 --external-network public \
+    --flavor m1.medium --master-flavor m1.medium --master-lb-enabled
+$ openstack coe cluster create demo --cluster-template k8s-capi \
+    --master-count 3 --node-count 3
+$ openstack coe cluster config demo
+\end{lstlisting}
+\end{itemize}
+
+\begin{remarque}[OpenStack et Kubernetes : deux niveaux]
+OpenStack fournit l'infrastructure (machines, réseaux, volumes) et Kubernetes orchestre les applications conteneurisées qui
+s'exécutent dessus : les deux ne sont pas concurrents, et Magnum relie le second au premier. Par rapport à un cluster monté à la
+main sur des machines virtuelles, on gagne une création, un redimensionnement et une mise à niveau par la même API, des nœuds
+décrits par un même modèle, et l'intégration aux autres services (identité, réseau, volumes, répartiteur de charge)
+\parencite{magnum-user}.
+\end{remarque}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.8cm] (cli) at (6.6,8.2) {Utilisateur \ $\cdot$ \ CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (ma) at (6.6,6.0)
+    {Magnum\\ {\scriptsize\mdseries clusters Kubernetes}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,6.0) {Keystone};
+  \node[psvc, minimum width=2.6cm] (ba) at (12.3,7.0) {Barbican};
+  \node[psvc, minimum width=2.6cm] (gl) at (12.3,5.0) {Glance};
+  \node[pgris, minimum width=7.6cm] (pi) at (6.6,3.7) {Pilote de cluster : Cluster API (Heat, historique)};
+  \node[psvc, minimum width=2.2cm] (no) at (2.2,1.8) {Nova};
+  \node[psvc, minimum width=2.2cm] (ne) at (5.2,1.8) {Neutron};
+  \node[psvc, minimum width=2.2cm] (ci) at (8.2,1.8) {Cinder};
+  \node[psvc, minimum width=2.2cm] (oc) at (11.2,1.8) {Octavia};
+  \node[pdat, minimum width=9.6cm] (cl) at (6.6,0.0) {Cluster Kubernetes : machines maîtres et workers};
+  \draw[fluxr] (cli) -- (ma)
+    node[num, pos=0.35] {1} node[etiqf, midway, right=4mm] {\texttt{coe cluster create}};
+  \draw[fluxr] (ma) -- (pi)
+    node[num, pos=0.4] {2} node[etiqf, midway, right=4mm] {construire le cluster};
+  \foreach \s in {no,ne,ci,oc} \draw[fluxo] (pi.south) -- (\s.north);
+  \node[num] at (6.6,2.65) {3};
+  \foreach \s in {no,ne,ci,oc} \draw[fluxo] (\s.south) -- (\s.south |- cl.north);
+  \draw[fluxo] (ma.west) -- (ks.east) node[etiqf, pos=0.5, above=2pt] {token};
+  \draw[fluxo] (ma.east) -- (ba.south west) node[etiqf, pos=0.55, above=3pt, sloped] {certificats};
+  \draw[fluxo] (ma.east) -- (gl.north west) node[etiqf, pos=0.55, below=3pt, sloped] {images};
+  \node[callout, minimum width=14.6cm] at (6.6,-1.3)
+    {Magnum ne construit rien lui-même : il délègue à un pilote, qui appelle Nova, Neutron, Cinder et Octavia.};
+\end{tikzpicture}}
+\caption{Magnum et ses voisins. L'utilisateur commande un cluster à l'API de Magnum (1) ; Magnum confie à son pilote de cluster
+le soin d'en construire un (2) ; le pilote crée, par les autres services, les machines, le réseau, les volumes et le répartiteur de
+charge (3).}
+\label{fig:ma-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : modèle, cluster, groupe de nœuds, pilote}\label{sec:ma-concepts}
+% ---------------------------------------------------------------------
+
+Magnum sépare la description d'un cluster, réutilisable, de sa création (tableau~\ref{tab:ma-objets}). Un
+\gls{clustertemplate} fixe le COE, l'image des nœuds, le réseau externe, les flavors et un réseau pour les pods. Un
+\gls{clustermagnum} en est une instance, avec un nombre de maîtres et de workers. Ses nœuds sont répartis en
+\glspl{nodegroup} \parencite{magnum-user,magnum-nodegroups}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{8.6cm}>{\raggedright\arraybackslash\ttfamily\small}p{3.7cm}@{}}
+\toprule
+\textbf{Terme} & \textbf{Rôle} & \textrm{\textbf{Exemple}} \\
+\midrule
+\Gls{clustertemplate} & Modèle : COE, image (propriété \texttt{os\_distro}), réseau externe, flavors, pilote réseau, labels. Il peut être public. & k8s-capi \\
+\Gls{clustermagnum} & Cluster créé à partir d'un modèle ; il a un statut, une adresse d'API et des nœuds. & demo \\
+\Gls{nodegroup} & Ensemble de nœuds de même rôle, flavor et image. Chaque cluster a \texttt{default-master} et \texttt{default-worker}. & gpu \\
+\Gls{pilotecluster} & Code qui exécute les opérations pour un triplet (type de serveur, système, COE). & k8s\_capi\_helm \\
+Label & Paramètre \texttt{clé=valeur} du modèle ou du cluster qui règle une fonction (add-ons, répartiteur\dots). & monitoring\_\allowbreak enabled=true \\
+\bottomrule
+\end{tabular}
+\caption{Le vocabulaire de Magnum \parencite{magnum-user,magnum-capi-helm-config}.}
+\label{tab:ma-objets}
+\end{table}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{8.0cm}>{\raggedright\arraybackslash\ttfamily\small}p{4.3cm}@{}}
+\toprule
+\textbf{Commande} & \textbf{Effet} & \textrm{\textbf{Exemple}} \\
+\midrule
+Groupe de nœuds & Ajoute un groupe (flavor, nombre, rôle, étiquettes de nœuds). Les groupes maîtres ne peuvent pas être créés. & coe nodegroup create \\
+Redimensionner & Fixe le nombre de nœuds d'un groupe ; on peut désigner les nœuds à retirer. & coe cluster resize \\
+Mettre à niveau & Applique un autre modèle (version de Kubernetes) au cluster ou à un groupe. & coe cluster upgrade \\
+\bottomrule
+\end{tabular}
+\caption{Les opérations de vie d'un cluster \parencite{magnum-nodegroups,osc-coe}.}
+\label{tab:ma-operations}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Architecture}\label{sec:ma-archi}
+% ---------------------------------------------------------------------
+
+Magnum se compose d'une API et d'un ou plusieurs conductors, reliés par une file de messages (tableau~\ref{tab:ma-composants} et
+figure~\ref{fig:ma-archi}). L'API valide la requête et l'enregistre dans la base ; le conductor l'exécute en appelant le pilote
+de cluster adapté \parencite{magnum-user}. Il exécute aussi des tâches périodiques qui font avancer le statut des clusters
+(\texttt{sync\_\allowbreak cluster\_\allowbreak status}) \parencite{magnum-source}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.6cm}>{\raggedright\arraybackslash}p{9.6cm}>{\raggedright\arraybackslash}p{2.3cm}@{}}
+\toprule
+\textrm{\textbf{Composant}} & \textbf{Rôle} & \textbf{Port} \\
+\midrule
+magnum-api & API REST (type de service \texttt{container-infra}) ; transmet les opérations au conductor par RPC. & 9511 \\
+magnum-conductor & Exécute les opérations : certificats, appel du pilote, tâches périodiques de suivi des clusters. & \\
+python-magnumclient & Greffon de la commande \texttt{openstack} (\texttt{openstack coe\dots}). & \\
+magnum-ui & Greffon d'Horizon pour les modèles et les clusters. & \\
+\bottomrule
+\end{tabular}
+\caption{Les composants de Magnum \parencite{magnum-install,osc-coe}.}
+\label{tab:ma-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.4cm] (cl) at (1.2,4.6) {Clients\\ {\scriptsize\mdseries CLI, Horizon}};
+  \node[pfoc, minimum width=3.2cm] (api) at (5.6,4.6) {magnum-api\\ {\scriptsize\mdseries API REST, port 9511}};
+  \node[pgris, minimum width=2.2cm, minimum height=3.4cm] (bus) at (9.4,4.6) {File de\\ messages\\ {\scriptsize\mdseries AMQP}};
+  \node[pfoc, minimum width=3.4cm] (c1) at (13.4,5.8) {magnum-conductor};
+  \node[psvc, minimum width=3.4cm] (c2) at (13.4,3.4) {magnum-conductor};
+  \node[psvc, minimum width=2.6cm] (ks) at (5.6,7.2) {Keystone};
+  \node[psvc, minimum width=2.6cm] (ba) at (13.4,7.6) {Barbican};
+  \node[pgris, minimum width=3.0cm] (db) at (1.4,0.5) {Base de données};
+  \node[pdat, minimum width=4.8cm] (bk) at (13.4,0.5) {Moteur du cluster\\ {\scriptsize\mdseries Cluster API (ou Heat)}};
+  \draw[fluxr] (cl.east) -- (api.west) node[num, pos=0.3, above=3pt] {1};
+  \draw[fluxo] (api.east) -- (api.east -| bus.west) node[num, pos=0.5, above=3pt] {2};
+  \draw[fluxo] (bus.east |- c1.west) -- (c1.west);
+  \draw[fluxo] (bus.east |- c2.west) -- (c2.west);
+  \draw[fluxr] (c2.south) -- (c2.south |- bk.north) node[num, pos=0.5, right=4pt] {3};
+  \node[etiqf] at (10.6,1.9) {pilote de cluster};
+  \draw[fluxo] (api.north) -- (ks.south) node[etiqf, pos=0.5, right=3pt] {token};
+  \draw[fluxo] (c1.north) -- (ba.south) node[etiqf, pos=0.5, right=3pt] {certificats};
+  \draw[fluxd] (db.north east) -- (api.south west);
+  \node[etiqf] at (3.2,2.4) {modèles, clusters, groupes};
+  \node[callout, minimum width=15.4cm] at (7.4,-1.0)
+    {On ajoute des conductors pour absorber la charge ; les clusters eux-mêmes ne passent jamais par Magnum.};
+\end{tikzpicture}}
+\caption{Architecture de Magnum. Les clients appellent l'API (1), qui transmet l'opération à un conductor par la file de
+messages (2). Le conductor appelle le pilote, qui agit sur le moteur du cluster (3). L'API et les conductors partagent la base
+de données ; les certificats du cluster sont conservés par Barbican (ou, sinon, par la base de Magnum).}
+\label{fig:ma-archi}
+\end{figure}
+
+Le pilote est choisi à partir de trois propriétés : le type de serveur (machine virtuelle), le système d'exploitation, lu dans
+la propriété \texttt{os\_distro} de l'image de Glance du modèle, et le COE. Un modèle peut aussi nommer son pilote
+(\texttt{--driver}). Si aucun pilote chargé ne répond au triplet, Magnum refuse l'opération
+(exercice~\ref{ex:ma-pilote}) \parencite{magnum-source,magnum-capi-helm-install}.
+
+% ---------------------------------------------------------------------
+\subsection{Deux générations de pilotes}\label{sec:ma-pilotes}
+% ---------------------------------------------------------------------
+
+Le support de cours décrit l'architecture d'origine : Magnum génère un modèle Heat, que Heat exécute (chapitre~\ref{chap:heat}).
+Cette description est devenue historique. Le pilote Heat (\texttt{k8s\_\allowbreak fedora\_\allowbreak coreos\_\allowbreak v1}) est déprécié depuis la
+version 2025.1 au profit de deux pilotes fondés sur \gls{clusterapi} \parencite{magnum-relnotes-2025-1,magnum-user}, et le dépôt
+de développement l'a supprimé, avec le gestionnaire de trusts de Keystone qu'il était seul à utiliser (notes de version
+\texttt{drop-heat-driver} et \texttt{drop-trust-manager}, pas encore reprises dans les notes publiées de la version 2026.1)
+\parencite{magnum-source,magnum-relnotes}. La figure~\ref{fig:ma-pilotes} compare les deux chaînes.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=4.4cm] (co) at (6.6,7.0) {magnum-conductor};
+  \node[pgris, minimum width=5.4cm, font=\scriptsize\bfseries] (h1) at (2.6,5.3) {Pilote Heat\\ {\mdseries historique, déprécié}};
+  \node[psvc, minimum width=5.4cm, font=\scriptsize\bfseries] (h2) at (2.6,3.5) {Heat\\ {\mdseries une stack par cluster}};
+  \node[psvc, minimum width=5.4cm, font=\scriptsize\bfseries] (h3) at (2.6,1.7) {Nova, Neutron, Cinder\\ {\mdseries ressources de la stack}};
+  \node[pdat, minimum width=5.4cm, font=\scriptsize\bfseries] (h4) at (2.6,0.0) {Machines Fedora CoreOS\\ {\mdseries configurées par cloud-init}};
+  \node[pgris, minimum width=5.4cm, font=\scriptsize\bfseries] (c1) at (10.6,5.3) {Pilotes Cluster API\\ {\mdseries \texttt{k8s\_capi\_helm}, \texttt{k8s\_cluster\_api}}};
+  \node[psvc, minimum width=5.4cm, font=\scriptsize\bfseries] (c2) at (10.6,3.5) {Cluster de gestion CAPI\\ {\mdseries ressources Kubernetes (CRD)}};
+  \node[psvc, minimum width=5.4cm, font=\scriptsize\bfseries] (c3) at (10.6,1.7) {Opérateur CAPO\\ {\mdseries crée Nova, Neutron, Cinder, Octavia}};
+  \node[pdat, minimum width=5.4cm, font=\scriptsize\bfseries] (c4) at (10.6,0.0) {Machines Ubuntu ou Flatcar\\ {\mdseries démarrées par kubeadm}};
+  \draw[fluxd] (co.south west) -- (h1.north);
+  \draw[fluxr] (co.south east) -- (c1.north);
+  \foreach \a/\b in {h1/h2,h2/h3,h3/h4} \draw[fluxd] (\a) -- (\b);
+  \foreach \a/\b in {c1/c2,c2/c3,c3/c4} \draw[fluxr] (\a) -- (\b);
+  \node[etiqf] at (2.6,6.55) {\texttt{stack\_id} = stack Heat};
+  \node[etiqf] at (10.6,6.55) {\texttt{stack\_id} = release Helm};
+  \node[callout, minimum width=15.4cm] at (6.6,-1.5)
+    {Chaîne historique en pointillés, chaîne actuelle en traits pleins : Magnum garde la même API pour l'utilisateur.};
+\end{tikzpicture}}
+\caption{Du conducteur de Magnum aux machines : le pilote Heat (à gauche) délègue à Heat ; les pilotes Cluster API (à droite)
+délèguent à un cluster de gestion Kubernetes, dont l'opérateur CAPO appelle les API d'OpenStack
+\parencite{magnum-capi-helm-user}.}
+\label{fig:ma-pilotes}
+\end{figure}
+
+Cluster API est un projet Kubernetes qui décrit un cluster par des ressources Kubernetes (\gls{crd}), qu'un opérateur compare
+sans cesse à la réalité et corrige : c'est un cluster Kubernetes qui en gère d'autres, le \gls{clustergestion}
+\parencite{magnum-capi-helm-user,capi-book}. Deux pilotes l'utilisent \parencite{magnum-relnotes-2025-1} :
+
+\begin{itemize}
+  \item \texttt{k8s\_capi\_helm}, du projet OpenStack \texttt{magnum-capi-helm} : le pilote installe, pour chaque cluster, une
+        release \gls{helm} du chart \texttt{openstack-cluster} dans le cluster de gestion ;
+  \item \texttt{k8s\_cluster\_api}, projet communautaire mené par VEXXHOST, qui suit la même idée avec son propre code
+        \parencite{magnum-cluster-api}.
+\end{itemize}
+
+Avec \texttt{k8s\_capi\_helm}, le pilote crée dans le cluster de gestion un espace de noms par projet (préfixe \texttt{magnum},
+réglable), un secret qui contient un \gls{appcred} de l'utilisateur, les secrets des autorités de certification de Magnum, puis
+la release Helm. Le nom de la release est gardé dans le champ \texttt{stack\_id} du cluster
+\parencite{magnum-capi-helm-source,magnum-capi-helm-user}. Les images sont des images Ubuntu ou Flatcar qui contiennent déjà
+Kubernetes, par exemple celles du projet \emph{image-builder} \parencite{magnum-capi-helm-install}. Le tableau~\ref{tab:ma-crd}
+donne les ressources du cluster de gestion à connaître pour diagnostiquer \parencite{magnum-capi-helm-user}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{5.0cm}>{\raggedright\arraybackslash}p{10.5cm}@{}}
+\toprule
+\textrm{\textbf{Ressource}} & \textbf{Rôle} \\
+\midrule
+cluster.cluster.x-k8s.io & Le cluster de charge de travail, vu de haut. \\
+kubeadmcontrolplane & Les nœuds maîtres, démarrés avec \texttt{kubeadm}. \\
+machinedeployment, machine & Les nœuds workers (par groupe de nœuds) et chaque machine, en général une machine virtuelle. \\
+openstackcluster, openstackmachine & Les ressources OpenStack d'un cluster ; l'opérateur CAPO les crée par les API d'OpenStack. \\
+helmrelease, manifests & Les add-ons installés dans le cluster de charge de travail (réseau, stockage, \dots). \\
+\bottomrule
+\end{tabular}
+\caption{Ressources du cluster de gestion pour un cluster de Magnum (groupes d'API \texttt{cluster.x-k8s.io},
+\texttt{infrastructure.cluster.x-k8s.io}, \texttt{addons.stackhpc.com}).}
+\label{tab:ma-crd}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Cycle de vie d'un cluster}\label{sec:ma-cycle}
+% ---------------------------------------------------------------------
+
+La figure~\ref{fig:ma-seq} suit la création d'un cluster avec \texttt{k8s\_capi\_helm}. L'API répond tout de suite par l'identifiant
+du cluster : la création est asynchrone, et on suit le statut avec \texttt{openstack coe cluster show}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.4cm, fill=insarouge!8, draw=insarouge] (u) at (0.8,0) {Utilisateur};
+  \node[acteur, minimum width=2.4cm, fill=insarouge, text=white, draw=black] (a) at (5.2,0) {Magnum\\ (API, conductor)};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (g) at (9.1,0) {Cluster de\\ gestion CAPI};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (o) at (12.9,0) {OpenStack\\ (Nova, Neutron\dots)};
+  \node[acteur, minimum width=2.4cm, fill=insagris!12, draw=insagris] (k) at (16.7,0) {Cluster\\ Kubernetes};
+  \foreach \a in {u,a,g,o,k} \draw[vie] (\a.south) -- ++(0,-9.2);
+  \seqmsg{0.8}{5.2}{-1.2}{1}{\texttt{coe cluster create}}
+  \seqrep{5.2}{0.8}{-2.2}{2}{identifiant,\\ \texttt{CREATE\_IN\_PROGRESS}}
+  \seqmsg{5.2}{9.1}{-3.3}{3}{espace de noms, secrets,\\ release Helm}
+  \seqmsg{9.1}{12.9}{-5.2}{4}{CAPO crée réseau,\\ machines, volumes, LB}
+  \seqmsg{12.9}{16.7}{-5.6}{5}{les machines\\ démarrent (kubeadm)}
+  \seqrep{9.1}{5.2}{-6.7}{6}{le conductor lit l'état\\ (tâche périodique)}
+  \seqrep{5.2}{0.8}{-7.8}{7}{\texttt{CREATE\_COMPLETE},\\ adresse de l'API}
+  \seqmsg{0.8}{5.2}{-8.9}{8}{\texttt{coe cluster config}}
+\end{tikzpicture}}
+\caption{Création d'un cluster avec le pilote \texttt{k8s\_capi\_helm}. Magnum répond aussitôt (2), prépare le cluster de gestion
+(3) ; CAPO construit l'infrastructure (4) et les machines démarrent (5). Une tâche périodique du conductor lit l'état des
+ressources (6) et fait passer le cluster à \texttt{CREATE\_COMPLETE} (7) ; l'utilisateur récupère alors son accès (8).}
+\label{fig:ma-seq}
+\end{figure}
+
+Les statuts du cluster et de chaque groupe de nœuds suivent la forme \texttt{OPÉRATION\_ÉTAT} (tableau~\ref{tab:ma-statuts}). Avec
+Cluster API, l'opérateur réessaie sans fin, si bien qu'un cluster ne passe pas vraiment en erreur : le code du pilote
+\texttt{k8s\_capi\_helm} ne traite que le passage de \texttt{\_IN\_PROGRESS} à \texttt{\_COMPLETE}, sauf quand un add-on
+du cluster ou un groupe de nœuds est constaté en échec. Un cluster qui ne se construit pas reste donc le plus souvent en cours
+au lieu de passer en \texttt{\_FAILED} \parencite{magnum-capi-helm-source}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{4.6cm}>{\raggedright\arraybackslash}p{10.9cm}@{}}
+\toprule
+\textrm{\textbf{Statut}} & \textbf{Signification} \\
+\midrule
+CREATE\_IN\_PROGRESS, UPDATE\_IN\_PROGRESS, DELETE\_IN\_PROGRESS & Une création, une modification (redimensionnement, mise à niveau) ou une suppression est en cours. \\
+CREATE\_COMPLETE, UPDATE\_COMPLETE & L'opération est terminée : le cluster est utilisable et son adresse d'API est connue. \\
+CREATE\_FAILED, UPDATE\_FAILED, DELETE\_FAILED & Échec constaté. Le pilote Heat s'appuie sur le statut de la stack ; les pilotes Cluster API le produisent peu (voir ci-dessus). \\
+\bottomrule
+\end{tabular}
+\caption{Statuts d'un cluster \parencite{magnum-source,magnum-troubleshooting}. Le champ \texttt{health\_status} (HEALTHY, UNHEALTHY,
+UNKNOWN) dépend d'un moniteur propre au pilote et n'est pas toujours renseigné.}
+\label{tab:ma-statuts}
+\end{table}
+
+Les opérations de vie d'un cluster se font par la même commande (tableau~\ref{tab:ma-operations}) \parencite{magnum-nodegroups,magnum-user} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack coe nodegroup create demo gpu --flavor gpu.large \
+    --node-count 2 --min-nodes 1 --max-nodes 4
+$ openstack coe cluster resize demo 5 --nodegroup default-worker
+$ openstack coe cluster resize demo 4 --nodegroup default-worker \
+    --nodes-to-remove 8f1c5b2e-aaaa-bbbb-cccc-0123456789ab
+$ openstack coe cluster upgrade demo k8s-capi-v1.29 --max-batch-size 1
+\end{lstlisting}
+\end{minipage}\par
+
+Sans \texttt{--nodes-to-remove}, Magnum choisit les nœuds à retirer en suivant une règle qui dépend du pilote ; on désigne
+donc soi-même les nœuds quand on veut garder les plus utiles. Le redimensionnement du groupe maître dépend aussi du pilote :
+la classe de base le refuse, tandis que \texttt{k8s\_capi\_helm} l'accepte avec un nombre impair de maîtres
+\parencite{magnum-source,magnum-capi-helm-source}. La mise à niveau n'est prise en charge que par les pilotes qui l'implémentent : avec Cluster API,
+elle remplace les machines par lots (\texttt{--max-batch-size}) \parencite{magnum-capi-helm-user}.
+
+% ---------------------------------------------------------------------
+\subsection{Réseau, stockage et sécurité}\label{sec:ma-reseau}
+% ---------------------------------------------------------------------
+
+\begin{itemize}
+  \item \textbf{Réseau.} Chaque cluster reçoit un réseau privé, relié par un routeur au réseau externe du modèle. Les nœuds
+        peuvent recevoir une adresse flottante (\texttt{--floating-ip-enabled}), et l'option \texttt{--master-lb-enabled} place
+        les maîtres derrière un répartiteur d'Octavia : l'API Kubernetes garde alors une adresse unique, que l'on peut
+        restreindre à certaines plages d'adresses. Le pilote réseau du modèle (\texttt{--network-driver}) choisit le
+        plugin de réseau de Kubernetes (par exemple Calico) \parencite{magnum-user,magnum-capi-helm-config}.
+  \item \textbf{Stockage.} Les volumes persistants des applications viennent de Cinder, par le pilote CSI de Cinder installé
+        dans le cluster ; le type de volume par défaut se règle dans la configuration du pilote
+        (\texttt{csi\_cinder\_default\_volume\_type}) \parencite{magnum-user,magnum-capi-helm-config}.
+  \item \textbf{Certificats.} Magnum crée l'autorité de certification de chaque cluster, signe les certificats clients et les
+        conserve dans Barbican (recommandé en production) ou dans sa base (\texttt{x509keypair}). Les commandes
+        \texttt{coe ca show}, \texttt{coe ca sign} et \texttt{coe ca rotate} les manipulent \parencite{magnum-install,magnum-user}.
+  \item \textbf{Identité.} Le cluster doit appeler les API d'OpenStack (volumes, répartiteurs) : le pilote
+        \texttt{k8s\_capi\_helm} crée pour cela un \gls{appcred} de l'utilisateur, stocké dans un secret du cluster de gestion ;
+        l'ancien pilote Heat s'appuyait sur un \gls{trust} et un utilisateur délégué dans un domaine dédié
+        \parencite{magnum-capi-helm-source,magnum-install}.
+\end{itemize}
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre et dépannage}\label{sec:ma-deploiement}
+% ---------------------------------------------------------------------
+
+L'installation suppose Keystone, Glance, Nova, Neutron et Cinder, ainsi qu'Octavia et Barbican pour les pilotes Cluster API
+\parencite{magnum-capi-helm-user}. On crée la base \texttt{magnum}, l'utilisateur \texttt{magnum}, le service
+\texttt{container-infra} et ses trois endpoints (port 9511) ; le guide d'installation décrit aussi, pour les versions qui
+embarquent encore le pilote Heat, un domaine \texttt{magnum} et son administrateur \texttt{magnum\_domain\_admin}
+\parencite{magnum-install}. On installe les paquets, on configure \texttt{/etc/magnum/magnum.conf}, puis on crée le schéma avec
+\texttt{magnum-db-manage upgrade} \parencite{magnum-install}.
+
+Le pilote Cluster API s'installe dans l'environnement Python de Magnum et lit le \texttt{kubeconfig} du cluster de gestion
+\parencite{magnum-capi-helm-install} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/magnum/magnum.conf (extrait)
+[api]
+host = 10.0.0.11
+[certificates]
+cert_manager_type = barbican
+[database]
+connection = mysql+pymysql://magnum:MAGNUM_DBPASS@controller/magnum
+[capi_helm]
+kubeconfig_file = /etc/magnum/kubeconfig
+namespace_prefix = magnum
+\end{lstlisting}
+\end{minipage}\par
+
+Il faut ensuite une image qui contient Kubernetes, avec la propriété \texttt{os\_distro} correcte pour que Magnum choisisse le
+bon pilote, puis un modèle et un cluster (section~\ref{sec:ma-role} et exercice~\ref{ex:ma-creer}). Le tableau~\ref{tab:ma-pannes} résume les pannes courantes
+\parencite{magnum-troubleshooting,magnum-capi-helm-user,magnum-cluster-api}.
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{6.4cm}>{\raggedright\arraybackslash}p{5.5cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Erreur « Cluster type\dots{} is not supported by any loaded cluster driver » & L'image du modèle n'a pas la propriété \texttt{os\_distro}, ou le pilote n'est pas installé. & \texttt{openstack image show I -c properties} ; journal du conductor \\
+Cluster bloqué en \texttt{CREATE\_IN\_PROGRESS} & Pilote Cluster API : l'opérateur réessaie (quota, flavor, image, réseau). & \texttt{kubectl} sur le cluster de gestion : \texttt{get cluster,machines -n ESPACE} ; \texttt{clusterctl describe cluster} \\
+\texttt{CREATE\_FAILED} (pilote Heat) & Une ressource de la stack a échoué. & \texttt{openstack stack failures list S} (chapitre~\ref{chap:heat}) \\
+Le conductor n'atteint pas le cluster de gestion & \texttt{kubeconfig\_file} absent, périmé ou sans droits. & Journal du conductor ; \texttt{kubectl --kubeconfig\dots{} get ns} \\
+\texttt{kubectl} refuse la connexion & Adresse de l'API ou certificats : mauvaise autorité ou répartiteur sans adresse flottante. & \texttt{coe cluster show} (\texttt{api\_address}) ; \texttt{coe ca show} \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Magnum.}
+\label{tab:ma-pannes}
+\end{table}
+
+\clearpage
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:ma-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Créer un cluster}\label{ex:ma-creer}
+Une équipe veut un cluster Kubernetes de trois maîtres et de quatre workers, nommé \texttt{prod}, à partir de l'image
+\texttt{ubuntu-jammy-kube-v1.28.3} (flavor \texttt{m1.large} pour tous les nœuds, réseau externe \texttt{public}, répartiteur
+devant les maîtres). Écrire les commandes qui créent le modèle \texttt{k8s-prod} et le cluster, puis celle qui récupère
+l'accès.
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}
+$ openstack coe cluster template create k8s-prod --coe kubernetes \
+    --image ubuntu-jammy-kube-v1.28.3 --external-network public \
+    --flavor m1.large --master-flavor m1.large --master-lb-enabled
+$ openstack coe cluster create prod --cluster-template k8s-prod \
+    --master-count 3 --node-count 4
+$ openstack coe cluster config prod
+\end{lstlisting}
+\texttt{--coe}, \texttt{--image} et \texttt{--external-network} sont obligatoires pour le modèle ; un nombre impair de maîtres
+préserve le quorum d'etcd. La commande \texttt{config} écrit le fichier d'accès, utilisable avec \texttt{kubectl} une fois le
+cluster en \texttt{CREATE\_COMPLETE}.
+\end{correction}
+
+\begin{exercice}{Pilote introuvable}\label{ex:ma-pilote}
+Après l'installation du pilote \texttt{k8s\_capi\_helm}, la création d'un cluster échoue avec « Cluster type (vm, ubuntu,
+kubernetes) is not supported by any loaded cluster driver ». Où le triplet vient-il et que vérifier ?
+\end{exercice}
+\begin{correction}
+Le triplet vient du modèle : \texttt{vm} est le type de serveur, \texttt{kubernetes} le COE, et le système (\texttt{ubuntu}) est
+lu dans la propriété \texttt{os\_distro} de l'image. Magnum compare ce triplet à ceux que déclarent les pilotes chargés ; les
+deux pilotes Cluster API déclarent Ubuntu et Flatcar. Il faut donc vérifier (1) que le paquet du pilote est installé dans
+l'environnement de Magnum et que le conductor a été redémarré, (2) que l'image porte \texttt{os\_distro}, par exemple avec
+\texttt{openstack image set I --os-distro ubuntu --os-version 22.04}.
+\end{correction}
+
+\begin{exercice}{Un cluster qui ne se construit pas}\label{ex:ma-bloque}
+Un cluster créé avec \texttt{k8s\_capi\_helm} reste une heure en \texttt{CREATE\_IN\_PROGRESS}, sans passer en échec. Où chercher
+la cause, et pourquoi le statut ne passe-t-il pas en \texttt{CREATE\_FAILED} ?
+\end{exercice}
+\begin{correction}
+Avec Cluster API, c'est l'opérateur qui réessaie en continu : hors le cas d'un add-on ou d'un groupe de nœuds en échec, le pilote
+ne sait que passer de \texttt{\_IN\_PROGRESS} à \texttt{\_COMPLETE}. La cause se lit donc dans le cluster de gestion, dans l'espace de noms du projet (préfixe \texttt{magnum},
+suivi de l'identifiant du projet sans tirets) :
+\begin{lstlisting}[style=terminal]
+$ kubectl -n magnum-ID get cluster,machines,openstackmachines
+$ kubectl -n magnum-ID describe openstackmachine M
+\end{lstlisting}
+On y lit en général un refus d'OpenStack : quota de machines ou de volumes, flavor ou image introuvable, réseau externe
+incorrect, application credential refusé.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:ma-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Magnum fournit des clusters Kubernetes comme ressource du cloud ; il délègue leur construction à un pilote de cluster
+        et n'est jamais sur le chemin des données.
+  \item Un modèle de cluster décrit (COE, image, flavors, réseau externe) ; un cluster en est une instance, composée de
+        groupes de nœuds (\texttt{default-master}, \texttt{default-worker}\dots).
+  \item L'API (9511) transmet au conductor par RPC ; le conductor appelle le pilote choisi d'après (type de serveur, système
+        lu dans \texttt{os\_distro}, COE).
+  \item Le pilote Heat décrit par le support est déprécié ; les pilotes Cluster API (\texttt{k8s\_capi\_helm},
+        \texttt{k8s\_cluster\_api}) pilotent un cluster de gestion dont l'opérateur CAPO appelle les API d'OpenStack.
+  \item Un cluster Cluster API qui ne se construit pas reste le plus souvent en \texttt{\_IN\_PROGRESS} : on lit la cause dans
+        le cluster de gestion.
+  \item Certificats dans Barbican en production ; identité du cluster par application credential avec le pilote capi-helm.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.8cm}>{\raggedright\arraybackslash}p{10.3cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer un modèle & \texttt{openstack coe cluster template create T --coe kubernetes --image I --external-network N} & \ref{sec:ma-role} \\
+Créer un cluster & \texttt{openstack coe cluster create C --cluster-template T --node-count N} & \ref{sec:ma-role} \\
+Récupérer l'accès & \texttt{openstack coe cluster config C} & \ref{sec:ma-role} \\
+Ajouter un groupe & \texttt{openstack coe nodegroup create C G --flavor F --node-count N} & \ref{sec:ma-cycle} \\
+Redimensionner & \texttt{openstack coe cluster resize C N [--nodes-to-remove ID]} & \ref{sec:ma-cycle} \\
+Mettre à niveau & \texttt{openstack coe cluster upgrade C T2} & \ref{sec:ma-cycle} \\
+Appliquer le schéma de base & \texttt{magnum-db-manage upgrade} & \ref{sec:ma-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Écrire les commandes qui créent un modèle et un cluster, puis récupèrent l'accès (exercice~\ref{ex:ma-creer}).
+  \item Expliquer comment Magnum choisit son pilote et corriger une image sans \texttt{os\_distro} (exercice~\ref{ex:ma-pilote}).
+  \item Situer la cause d'un cluster bloqué dans le cluster de gestion (exercice~\ref{ex:ma-bloque}).
+\end{itemize}
+\end{savoirfaire}

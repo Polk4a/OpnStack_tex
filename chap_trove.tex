@@ -2,10 +2,739 @@
 %  Chapitre « Trove : les bases de données en tant que service »
 %  Fichier importé par main.tex avec \include{chap_trove}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Services avancés » (chapitre 5, partie 4), présentation Trove
+%  (groupe 5), documentation officielle de Trove (voir sources.bib).
+%  Écarts avec le support, vérifiés dans la documentation et le code : syntaxe de la
+%  CLI (\texttt{--flavor}, \texttt{backup create NOM --instance I}), moteurs réellement
+%  pris en charge (MySQL, MariaDB, PostgreSQL), quotas propres à Trove, statut d'exploitation.
+%  Chapitre détaillé : 15 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Trove : les bases de données en tant que service}\label{chap:trove}
+% =====================================================================
+
+Trove fait d'une base de données un service du cloud : l'utilisateur commande une instance MySQL, MariaDB ou PostgreSQL, et Trove
+s'occupe de la machine, du volume, du réseau, de la configuration, des sauvegardes et de la réplication. Ce chapitre présente son
+rôle, ses concepts, son architecture et l'instance invitée, les datastores et leurs images, le cycle de vie, les opérations
+courantes (configuration, sauvegardes, réplication), la sécurité, la mise en œuvre et le dépannage, puis situe Trove face aux offres
+du cloud public et à ses alternatives \parencite{trove-overview}.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Trove}\label{sec:tr-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Trove}
+Trove est le service Database d'OpenStack : un \gls{dbaas}. Il fournit des bases de données à plusieurs locataires, chacune dans une
+instance de Nova, et n'impose aucune configuration particulière à Nova puisqu'il interagit avec les autres services uniquement par
+leurs API \parencite{trove-design}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} « Une machine virtuelle avec MySQL dedans » laisse à l'utilisateur les sauvegardes, les mises à jour, la
+        réplication et la sécurité. Trove les automatise, comme le font RDS (AWS) ou Cloud SQL (Google) dans le cloud public
+        \parencite{trove-overview}.
+  \item \textbf{Communique avec.} Keystone (authentification), Nova (machine), Cinder (volume de données), Neutron (réseaux),
+        Glance (image de l'instance), Swift (sauvegardes et journaux), Barbican (certificats TLS) et une file de messages
+        (RabbitMQ) pour dialoguer avec les instances \parencite{trove-design,trove-production,trove-ssl}. Trove orchestre : il ne
+        remplace aucun de ces services.
+  \item \textbf{Exemple.} créer une base MySQL, puis lire son adresse une fois l'instance prête :
+\begin{lstlisting}[style=terminal]
+$ openstack database instance create demo-db \
+    --flavor d2 --size 5 --nic net-id=$NET_ID \
+    --datastore mysql --datastore-version 8.4 \
+    --databases app --users appuser:SECRET
+$ openstack database instance show demo-db
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.8cm] (cli) at (6.6,8.2) {Utilisateur \ $\cdot$ \ CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (tr) at (6.6,6.0)
+    {Trove\\ {\scriptsize\mdseries bases de données}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,6.0) {Keystone};
+  \node[psvc, minimum width=2.6cm] (ba) at (12.3,7.0) {Barbican};
+  \node[psvc, minimum width=2.6cm] (gl) at (12.3,5.0) {Glance};
+  \node[psvc, minimum width=2.2cm] (no) at (2.2,2.6) {Nova};
+  \node[psvc, minimum width=2.2cm] (ne) at (5.4,2.6) {Neutron};
+  \node[psvc, minimum width=2.2cm] (ci) at (8.6,2.6) {Cinder};
+  \node[pdat, minimum width=9.6cm] (db) at (5.4,0.4) {Instance de base de données : machine, volume, moteur};
+  \node[psvc, minimum width=2.6cm] (sw) at (12.3,0.4) {Swift};
+  \draw[fluxr] (cli) -- (tr)
+    node[num, pos=0.35] {1} node[etiqf, midway, right=4mm] {\texttt{database instance create}};
+  \foreach \s in {no,ne,ci} \draw[fluxo] (tr.south) -- (\s.north);
+  \node[num] at (5.4,4.3) {2};
+  \node[etiqf] at (9.6,4.35) {provisionne machine,\\ réseau, volume};
+  \foreach \s in {no,ne,ci} \draw[fluxo] (\s.south) -- (\s.south |- db.north);
+  \draw[fluxo] (tr.west) -- (ks.east) node[etiqf, pos=0.5, above=2pt] {token};
+  \draw[fluxo] (tr.east) -- (ba.south west) node[etiqf, pos=0.55, above=3pt, sloped] {certificats};
+  \draw[fluxo] (tr.east) -- (gl.north west) node[etiqf, pos=0.55, below=3pt, sloped] {image};
+  \draw[fluxd] (db.east) -- (sw.west) node[num, pos=0.5, above=3pt] {3};
+  \node[etiqf] at (11.0,-0.45) {sauvegardes};
+  \node[callout, minimum width=14.6cm] at (6.6,-1.5)
+    {Trove orchestre ces services par leurs API ; l'agent embarqué dans l'instance dialogue sans cesse avec lui.};
+\end{tikzpicture}}
+\caption{Trove et ses voisins. L'utilisateur demande une instance à l'API de Trove (1) ; Trove obtient de Nova, Neutron et Cinder la
+machine, le réseau et le volume (2) ; les sauvegardes partent vers Swift (3).}
+\label{fig:tr-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : datastore, instance, groupe de configuration}\label{sec:tr-concepts}
+% ---------------------------------------------------------------------
+
+L'administrateur du cloud enregistre des \glspl{datastore} et leurs versions ; l'utilisateur crée des instances à partir de l'un
+d'eux (tableau~\ref{tab:tr-objets}). Trove suit chaque instance par deux états distincts, décrits en section~\ref{sec:tr-cycle}
+\parencite{trove-datastore,trove-status}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.5cm}>{\raggedright\arraybackslash}p{8.5cm}>{\raggedright\arraybackslash\ttfamily\small}p{3.5cm}@{}}
+\toprule
+\textbf{Terme} & \textbf{Rôle} & \textrm{\textbf{Exemple}} \\
+\midrule
+\Gls{datastore} & Type de base de données proposé aux utilisateurs, créé par l'administrateur. & mysql \\
+\Gls{versiondatastore} & Version du moteur, liée à une image Glance (identifiant ou étiquettes) ; son numéro est celui de l'image Docker du moteur. & 8.4 \\
+\Gls{instancebdd} & Base déployée : machine Nova, volume Cinder et moteur dans un conteneur. Elle a un statut et un statut d'exploitation. & demo-db \\
+Flavor, volume & Taille de la machine (\texttt{database flavor list}) et du volume de données (en Go). & d2, 5 \\
+\Gls{groupeconfig} & Jeu de paramètres du moteur, appliqué à une ou plusieurs instances. & group1 \\
+\Gls{sauvegarde} & Copie d'une instance, stockée dans un conteneur Swift ; une stratégie en fixe le conteneur. & nightly-1 \\
+\Gls{replique} & Instance en lecture seule alimentée par un primaire ; son rôle est \texttt{replica}, celui du primaire \texttt{primary}. & demo-db-r1 \\
+\Gls{reseaugestion} & Réseau réservé aux échanges entre le plan de contrôle et l'agent de chaque instance. & trove-mgmt \\
+\bottomrule
+\end{tabular}
+\caption{Le vocabulaire de Trove \parencite{trove-datastore,trove-create,trove-production}.}
+\label{tab:tr-objets}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Architecture}\label{sec:tr-archi}
+% ---------------------------------------------------------------------
+
+Le plan de contrôle de Trove comprend trois services : l'API, le taskmanager et le conductor. Un quatrième composant, l'agent invité,
+s'exécute dans chaque instance (tableau~\ref{tab:tr-composants} et figure~\ref{fig:tr-archi}) \parencite{trove-design,trove-overview}.
+Tous communiquent par la file de messages (RPC \texttt{oslo.messaging}) ; Trove a sa propre base de données.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.3cm}>{\raggedright\arraybackslash}p{8.4cm}>{\raggedright\arraybackslash}p{3.8cm}@{}}
+\toprule
+\textrm{\textbf{Composant}} & \textbf{Rôle} & \textbf{Où, file ou port} \\
+\midrule
+trove-api & API REST (service de type \texttt{database}). Valide, puis transmet par RPC ; pour les tâches simples (lister les bases ou les utilisateurs), il peut s'adresser directement à l'agent. & Contrôleur, port 8779 \\
+trove-taskmanager & Fait le gros du travail : crée la machine, le volume et les ports, gère le cycle de vie et ordonne les opérations sur la base. & Contrôleur, file \texttt{taskmanager} \\
+trove-conductor & Reçoit des instances leurs mises à jour (statut, état d'une sauvegarde) et les inscrit dans la base : les agents n'accèdent donc jamais à la base de Trove. & Contrôleur, file \texttt{trove-conductor} \\
+trove-guestagent & Dans l'instance : traduit les ordres abstraits du taskmanager en actions propres au moteur, gère le conteneur du moteur et signale l'état. & Instance, file \texttt{guestagent.}{\textless}id{\textgreater} \\
+\bottomrule
+\end{tabular}
+\caption{Les composants de Trove \parencite{trove-design,trove-production}.}
+\label{tab:tr-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.0cm] (cl) at (1.1,7.2) {Clients\\ {\scriptsize\mdseries CLI, Horizon}};
+  \node[pfoc, minimum width=3.0cm] (api) at (4.6,7.2) {trove-api\\ {\scriptsize\mdseries port 8779}};
+  \node[psvc, minimum width=3.0cm] (tm) at (8.4,7.2) {trove-taskmanager};
+  \node[psvc, minimum width=3.0cm] (cd) at (12.2,7.2) {trove-conductor};
+  \node[psvc, minimum width=3.0cm] (os) at (8.4,9.4) {Nova, Cinder,\\ Neutron, Glance};
+  \node[pgris, minimum width=3.0cm] (db) at (12.2,9.4) {Base de données};
+  \node[pgris, minimum width=13.6cm] (bus) at (6.9,4.8) {File de messages (RabbitMQ)};
+  \draw[fluxr] (cl.east) -- (api.west) node[num, pos=0.3, above=3pt] {1};
+  \draw[fluxo] (api.south) -- (api.south |- bus.north) node[num, pos=0.5, left=4pt] {2};
+  \draw[fluxo] (tm.south |- bus.north) -- (tm.south);
+  \draw[fluxd] (cd.south) -- (cd.south |- bus.north);
+  \draw[fluxo] (tm.north) -- (os.south) node[etiqf, pos=0.5, right=3pt] {VM, volume, ports};
+  \draw[fluxd] (cd.north) -- (db.south) node[etiqf, pos=0.5, right=3pt] {état};
+  \begin{scope}[on background layer]
+    \node[draw=insagris, dashed, rounded corners=4pt, fill=insagris!4, fit={(0.4,-2.0) (13.4,3.7)}] (vm) {};
+  \end{scope}
+  \node[anchor=north east, font=\scriptsize\bfseries, text=insagris] at (13.3,3.65) {Instance de base de données (machine Nova)};
+  \node[psvc, minimum width=3.4cm] (ga) at (3.4,1.4) {trove-guestagent};
+  \node[pdat, minimum width=4.6cm] (ct) at (9.4,1.4) {Conteneur Docker\\ {\scriptsize\mdseries MySQL, MariaDB, PostgreSQL}};
+  \node[pgris, minimum width=3.4cm] (vo) at (9.4,-0.9) {Volume Cinder};
+  \draw[fluxd] (ga.north) -- (ga.north |- bus.south) node[num, pos=0.5, left=4pt] {3};
+  \draw[fluxo] (bus.south -| 5.4,0) -- (5.4,1.4 |- ga.north east) ;
+  \draw[fluxo] (ga.east) -- (ct.west) node[etiqf, midway, above=2pt] {gère};
+  \draw[fluxo] (ct.south) -- (vo.north);
+  \node[callout, minimum width=15.4cm] at (6.9,-2.9)
+    {L'agent n'ouvre jamais de connexion vers l'extérieur de l'instance : il lit sa file et signale son état par le conductor.};
+\end{tikzpicture}}
+\caption{Architecture de Trove. Les clients appellent l'API (1), qui transmet la requête par la file de messages (2) ; le taskmanager
+crée la machine, le volume et les ports par Nova, Cinder et Neutron. L'agent de l'instance lit sa propre file, exécute les ordres et
+renvoie l'état au conductor (3), qui l'inscrit dans la base de données.}
+\label{fig:tr-archi}
+\end{figure}
+
+L'instance est lancée par le taskmanager à partir d'une \gls{imageinvitee} de Glance. Celle-ci contient un système (Ubuntu, le seul
+entièrement testé), Docker et l'agent \parencite{trove-guest-images}. Le moteur de base de données tourne dans un
+\gls{conteneurlinux} Docker, depuis Victoria ; la sauvegarde et la restauration s'exécutent aussi dans un conteneur
+\parencite{trove-guest-images}. Le taskmanager injecte dans la machine deux fichiers de configuration : \texttt{guest\_info.conf}
+(identité de l'instance) et \texttt{trove-guestagent.conf} (configuration de l'agent). Les données sont sur un volume Cinder (option
+\texttt{volume\_support}, vraie par défaut) ; la machine a une interface sur le réseau de l'utilisateur et une sur le réseau de
+gestion \parencite{trove-guest-images,trove-production}. Pour tirer l'image Docker du moteur, la machine doit atteindre un registre,
+public ou privé (\texttt{docker\_\allowbreak insecure\_\allowbreak registries}) ; les options \texttt{docker\_image} et
+\texttt{backup\_docker\_image} de chaque datastore la désignent \parencite{trove-guest-images}.
+
+% ---------------------------------------------------------------------
+\subsection{Datastores, versions et images}\label{sec:tr-datastores}
+% ---------------------------------------------------------------------
+
+Le support évoque, outre les moteurs relationnels, des moteurs NoSQL (Cassandra, MongoDB, Redis, CouchDB\dots). Ils ont existé dans
+d'anciennes versions, mais le code actuel de l'agent invité ne contient plus que MySQL, MariaDB et PostgreSQL, et la matrice de la
+documentation ne liste que ces trois moteurs (tableau~\ref{tab:tr-matrice}). D'autres peuvent fonctionner, sans avoir été testés à fond
+\parencite{trove-datastore,trove-source}. Le clustering existe encore dans l'API mais est déclaré expérimental et déconseillé en
+production \parencite{trove-clustering}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{4.0cm}@{}}
+\toprule
+\textbf{Moteur} & \textbf{2025.1} & \textbf{2025.2 et 2026.1} & \textbf{2026.2} \\
+\midrule
+PostgreSQL & 12 & 16, 17 & 16, 17, 18 \\
+MySQL & 5.7 & 8.0, 8.4 & 8.0, 8.4 \\
+MariaDB & 10.4 & 11.4, 11.8 & 11.4, 11.8 \\
+\bottomrule
+\end{tabular}
+\caption{Versions des moteurs testées et vérifiées par OpenStack \parencite{trove-datastore}.}
+\label{tab:tr-matrice}
+\end{table}
+
+Depuis Victoria, un datastore n'a plus besoin de sa propre image : une même image invitée sert tous les moteurs, car le moteur vient
+d'une image Docker dont l'étiquette est le numéro de la version du datastore \parencite{trove-datastore,trove-guest-images}. Une version
+de datastore référence l'image Glance par son identifiant ou par des étiquettes : avec les étiquettes, Trove choisit
+l'image la plus récente portant toutes ces étiquettes, ce qui évite de modifier la version à chaque nouvelle image
+\parencite{trove-datastore}. L'administrateur construit l'image avec \texttt{trovestack}, l'enregistre dans Glance, crée la
+version de datastore, puis charge les règles de validation des groupes de configuration :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ ./trovestack build-image ubuntu noble false ubuntu guest.qcow2
+$ openstack image create trove-guest-ubuntu-noble --private \
+    --disk-format qcow2 --container-format bare \
+    --tag trove --tag mysql --file guest.qcow2
+$ openstack datastore version create 8.4 mysql mysql "" \
+    --image-tags trove,mysql --active --default
+$ trove-manage db_load_datastore_config_parameters mysql 8.4 \
+    $TROVE_DIR/trove/templates/mysql/validation-rules.json
+\end{lstlisting}
+\end{minipage}\par
+
+Le dernier argument de \texttt{build-image} fixe la destination ; avec \texttt{dev\_mode=true} (valeur par défaut), l'agent télécharge
+son code sur le contrôleur au démarrage, ce qui ne sert qu'au développement \parencite{trove-guest-images}. \texttt{trove-manage} se
+lance sur le contrôleur. Pour masquer une version obsolète, l'administrateur écrit
+\texttt{openstack datastore version set ID --disable} \parencite{trove-datastore}.
+
+% ---------------------------------------------------------------------
+\subsection{Cycle de vie d'une instance}\label{sec:tr-cycle}
+% ---------------------------------------------------------------------
+
+La figure~\ref{fig:tr-seq} suit la création d'une instance. L'API répond tout de suite ; le taskmanager provisionne, puis l'agent, une
+fois démarré, prépare le moteur et signale son état par le conductor \parencite{trove-design,trove-create,trove-production}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.3cm, fill=insarouge!8, draw=insarouge] (u) at (0.8,0) {Utilisateur};
+  \node[acteur, minimum width=2.3cm, fill=insarouge, text=white, draw=black] (a) at (4.0,0) {trove-api};
+  \node[acteur, minimum width=2.3cm, fill=insapeche, draw=insaorange] (t) at (7.2,0) {trove-\\ taskmanager};
+  \node[acteur, minimum width=2.3cm, fill=insapeche, draw=insaorange] (o) at (10.4,0) {Nova, Cinder,\\ Neutron};
+  \node[acteur, minimum width=2.3cm, fill=insagris!12, draw=insagris] (g) at (13.6,0) {Agent\\ invité};
+  \node[acteur, minimum width=2.3cm, fill=insapeche, draw=insaorange] (c) at (16.8,0) {trove-\\ conductor};
+  \foreach \a in {u,a,t,o,g,c} \draw[vie] (\a.south) -- ++(0,-9.0);
+  \seqmsg{0.8}{4.0}{-1.2}{1}{\texttt{instance create}}
+  \seqrep{4.0}{0.8}{-2.3}{2}{identifiant,\\ \texttt{BUILD}}
+  \seqmsg{4.0}{7.2}{-3.4}{3}{RPC : créer}
+  \seqmsg{7.2}{10.4}{-4.5}{4}{machine, volume,\\ ports, groupes}
+  \seqmsg{10.4}{13.6}{-5.6}{5}{démarrage ;\\ fichiers injectés}
+  \seqmsg{7.2}{13.6}{-6.7}{6}{\texttt{prepare} (file \texttt{guestagent})}
+  \seqmsg{13.6}{16.8}{-7.8}{7}{état du moteur\\ (\texttt{HEALTHY})}
+  \seqrep{4.0}{0.8}{-8.9}{8}{\texttt{ACTIVE},\\ \texttt{HEALTHY}}
+\end{tikzpicture}}
+\caption{Création d'une instance. L'API répond aussitôt (2) et confie la création au taskmanager (3), qui obtient la machine, le volume
+et les ports (4). Au démarrage (5), l'agent reçoit l'ordre \texttt{prepare} : volume monté, conteneur du moteur lancé (6). Il signale
+son état au conductor (7) ; l'utilisateur lit alors \texttt{ACTIVE} et \texttt{HEALTHY} (8).}
+\label{fig:tr-seq}
+\end{figure}
+
+Trove maintient deux états (tableau~\ref{tab:tr-statuts}). Le \texttt{status} reflète la machine et la tâche en cours ; le
+\gls{statutexploitation} (\texttt{operating\_status}) est l'état réel du moteur, surveillé par l'agent. Une instance \texttt{ACTIVE} n'est donc
+pas forcément utilisable : le support la dit prête dès \texttt{ACTIVE}, alors qu'il faut attendre \texttt{HEALTHY} avant de se connecter
+\parencite{trove-status,trove-create}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{4.3cm}>{\raggedright\arraybackslash}p{11.2cm}@{}}
+\toprule
+\textrm{\textbf{Valeur}} & \textbf{Signification} \\
+\midrule
+NEW, BUILD & Demande reçue ; instance en cours d'installation. \\
+ACTIVE & Machine et tâches terminées (le moteur est surveillé par le statut d'exploitation). \\
+REBOOT, RESIZE, UPGRADE & Redémarrage, changement de flavor ou de volume, mise à niveau du datastore. \\
+RESTART\_REQUIRED & Le moteur doit redémarrer, par exemple après un changement de configuration. \\
+BACKUP & Sauvegarde en cours. \\
+PROMOTE, EJECT, DETACH & Opérations de réplication : promotion d'une réplique, éviction du primaire, détachement d'une réplique. \\
+SHUTDOWN & Instance en cours de suppression. \\
+\textrm{\textit{statut d'exploitation :}} HEALTHY, SHUTDOWN & Moteur en marche ; moteur arrêté ou planté. \\
+\bottomrule
+\end{tabular}
+\caption{États d'une instance \parencite{trove-status}. Le statut \texttt{ERROR} s'affiche, entre autres, quand l'agent ne répond pas avant le délai de création
+(\texttt{usage\_\allowbreak timeout}).}
+\label{tab:tr-statuts}
+\end{table}
+
+L'utilisateur agit sur une instance en place : \texttt{openstack database instance resize flavor}, \texttt{resize volume},
+\texttt{restart}, \texttt{reboot}, \texttt{rebuild} et \texttt{upgrade}. Cette dernière change la version du datastore (par exemple de
+\texttt{5.7.29} à \texttt{5.7.30}) à partir d'une image invitée de la version visée ; elle peut interrompre le service
+\parencite{trove-upgrade-ds}.
+
+% ---------------------------------------------------------------------
+\subsection{Bases, utilisateurs et groupes de configuration}\label{sec:tr-config}
+% ---------------------------------------------------------------------
+
+L'API de gestion des bases et des utilisateurs de Trove ne fonctionne que pour MySQL. Pour tous les moteurs, on peut activer
+le compte \texttt{root} et obtenir son mot de passe (\texttt{root enable}), puis gérer bases et utilisateurs par le client du moteur
+\parencite{trove-users}. L'accès réseau se règle à la création : \texttt{--is-public} expose l'instance et
+\texttt{--allowed-cidr} limite les plages d'adresses autorisées \parencite{trove-create}.
+
+Un \gls{groupeconfig} applique des paramètres au moteur, en masse, à plusieurs instances. Chaque version de datastore accepte ses propres
+paramètres, validés d'après le fichier chargé par \texttt{trove-manage} \parencite{trove-config,trove-datastore} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack database user create demo-db appuser SECRET --databases app
+$ openstack database configuration parameter list $DS_VERSION_ID
+$ openstack database configuration create group1 \
+    '{"sync_binlog": 1}' --datastore mysql --datastore-version 8.4
+$ openstack database configuration attach demo-db $GROUP_ID
+\end{lstlisting}
+\end{minipage}\par
+
+Si le paramètre impose un redémarrage, l'instance passe en \texttt{RESTART\_REQUIRED} jusqu'à
+\texttt{openstack database instance restart}. On détache un groupe avec \texttt{configuration detach}, on liste ses instances avec
+\texttt{configuration instances} et on le supprime quand plus aucune instance ne l'utilise \parencite{trove-config,trove-status}.
+
+% ---------------------------------------------------------------------
+\subsection{Sauvegardes et restauration}\label{sec:tr-backup}
+% ---------------------------------------------------------------------
+
+Une sauvegarde est lancée par l'API, exécutée par l'agent dans un conteneur dédié, et stockée dans Swift (figure~\ref{fig:tr-backup}).
+Le conteneur Swift se choisit, par ordre de priorité décroissante, à la création de la sauvegarde, par une \emph{stratégie de
+sauvegarde} (d'un projet ou d'une instance), puis par la configuration de Trove (\texttt{database\_backups} par défaut)
+\parencite{trove-backup}. Une restauration crée toujours une \emph{nouvelle} instance à partir de la sauvegarde.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.2cm] (cl) at (1.3,4.2) {Utilisateur};
+  \node[pfoc, minimum width=2.4cm] (tr) at (6.2,4.2) {Trove};
+  \node[pdat, minimum width=3.8cm] (src) at (11.6,4.2) {Instance source\\ {\scriptsize\mdseries agent, conteneur de sauvegarde}};
+  \node[psvc, minimum width=2.8cm] (sw) at (17.0,4.2) {Swift\\ {\scriptsize\mdseries \texttt{database\_backups}}};
+  \node[pdat, minimum width=3.8cm] (nw) at (11.6,0.9) {Nouvelle instance\\ {\scriptsize\mdseries restaurée}};
+  \draw[fluxr] (cl) -- (tr) node[num, pos=0.5] {1} node[etiqf, pos=0.5, above=8pt] {\texttt{backup create}};
+  \draw[fluxo] (tr) -- (src) node[num, pos=0.5] {2} node[etiqf, pos=0.5, above=8pt] {RPC};
+  \draw[fluxo] (src) -- (sw) node[num, pos=0.5] {3} node[etiqf, pos=0.5, above=8pt] {données};
+  \draw[fluxr] (tr.south) -- (nw.west) node[num, pos=0.3, left=3pt] {4} node[etiqf, pos=0.7, below=3pt, sloped] {\texttt{create --backup}};
+  \draw[fluxo] (sw.south) -- (nw.east) node[num, pos=0.4, right=3pt] {5} node[etiqf, pos=0.75, below=3pt, sloped] {restauration};
+  \node[callout, minimum width=15.6cm] at (8.7,-0.9)
+    {Une sauvegarde incrémentale (\texttt{--parent}) s'ajoute à une sauvegarde complète ; la restauration applique toute la chaîne.};
+\end{tikzpicture}}
+\caption{Sauvegarde et restauration. La demande (1) est transmise à l'agent (2), qui envoie les données à Swift (3). Pour restaurer,
+l'utilisateur crée une instance à partir de la sauvegarde (4) ; ses données viennent de Swift (5).}
+\label{fig:tr-backup}
+\end{figure}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack database backup create nightly-1 --instance demo-db
+$ openstack database backup create nightly-2 --instance demo-db \
+    --parent $(openstack database backup show nightly-1 \
+               -f value -c id)
+$ openstack database backup list
+$ openstack database instance create demo-db2 --flavor d2 --size 5 \
+    --nic net-id=$NET_ID --datastore mysql --datastore-version 8.4 \
+    --backup nightly-2
+\end{lstlisting}
+\end{minipage}\par
+
+Un état \texttt{COMPLETED} signale la fin de la sauvegarde. Trois précautions : supprimer à la main les objets du conteneur Swift rend la
+restauration impossible ; une sauvegarde bloquée à l'état \texttt{RUNNING} ne peut être supprimée qu'après
+\texttt{running\_\allowbreak backups\_\allowbreak expires} jours ; pour PostgreSQL, une sauvegarde incrémentale échoue si le fichier journal (WAL) du
+parent a été purgé, il faut alors refaire une sauvegarde complète \parencite{trove-backup}. En déploiement multi-régions avec un Swift
+géo-répliqué, \texttt{--restore-from} permet de restaurer dans une autre région à partir de l'URL des données d'origine
+\parencite{trove-backup}.
+
+% ---------------------------------------------------------------------
+\subsection{Réplication}\label{sec:tr-replication}
+% ---------------------------------------------------------------------
+
+Les \glspl{replique} répartissent la charge de lecture : les lectures vont aux répliques, les écritures au primaire (figure~\ref{fig:tr-repl}). La
+réplication est asynchrone, avec un retard de quelques secondes à quelques minutes ; elle ne soulage pas le primaire en écriture
+\parencite{trove-replication}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=2.6cm] (a) at (2.8,3.6) {instance A\\ {\scriptsize\mdseries primary}};
+  \node[psvc, minimum width=2.6cm] (b) at (0.9,0.9) {instance B\\ {\scriptsize\mdseries replica}};
+  \node[psvc, minimum width=2.6cm] (c) at (4.7,0.9) {instance C\\ {\scriptsize\mdseries replica}};
+  \draw[fluxd] (a.south west) -- (b.north);
+  \draw[fluxd] (a.south east) -- (c.north);
+  \node[etiqf] at (0.9,2.4) {asynchrone};
+  \node[etiqf] at (4.7,2.4) {asynchrone};
+  \node[pfoc, minimum width=2.6cm] (b2) at (11.8,3.6) {instance B\\ {\scriptsize\mdseries primary}};
+  \node[psvc, minimum width=2.6cm] (a2) at (9.9,0.9) {instance A\\ {\scriptsize\mdseries replica}};
+  \node[psvc, minimum width=2.6cm] (c2) at (13.7,0.9) {instance C\\ {\scriptsize\mdseries replica}};
+  \draw[fluxd] (b2.south west) -- (a2.north);
+  \draw[fluxd] (b2.south east) -- (c2.north);
+  \draw[fluxr] (5.6,2.9) -- (8.6,2.9) node[etiqf, midway, above=2pt] {\texttt{promote B}};
+  \node[etiqf] at (7.1,2.1) {statut \texttt{PROMOTE}};
+  \node[callout, minimum width=14.6cm] at (7.3,-0.6)
+    {Aucune bascule automatique : c'est l'opérateur qui promeut une réplique, puis qui oriente les applications vers elle.};
+\end{tikzpicture}}
+\caption{Réplication : avant (à gauche) et après (à droite) la promotion de la réplique B. Les trois instances passent par le statut
+\texttt{PROMOTE} puis reviennent à \texttt{HEALTHY} ; chaque serveur garde sa propre chaîne de connexion.}
+\label{fig:tr-repl}
+\end{figure}
+
+On crée une réplique avec \texttt{--replica-of}, sans flavor ni datastore, repris du primaire. Les contraintes sont fortes
+\parencite{trove-replication} : tous les moteurs ne gèrent pas la réplication ; on ne peut que créer une nouvelle réplique (pas
+rattacher une instance existante) ; une réplique d'une réplique est impossible ; les répliques se suppriment avant le primaire ; il
+n'y a \emph{aucun} basculement automatique.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack database instance create demo-db-r1 \
+    --nic net-id=$NET_ID --replica-of demo-db
+$ openstack database instance list -c Name -c Status \
+    -c "Operating Status" -c Role
+$ openstack database instance promote demo-db-r1
+$ openstack database instance eject $FAILED_PRIMARY
+$ openstack database instance detach demo-db-r1
+\end{lstlisting}
+\end{minipage}\par
+
+\texttt{promote} fait d'une réplique saine le nouveau primaire ; \texttt{eject} évince un primaire en panne pour en élire un parmi les
+répliques ; \texttt{detach} fait d'une réplique un serveur autonome, qui ne redevient jamais réplique \parencite{trove-replication}.
+
+% ---------------------------------------------------------------------
+\subsection{Réseau et sécurité}\label{sec:tr-secu}
+% ---------------------------------------------------------------------
+
+Chaque instance a deux interfaces : l'une sur le réseau de l'utilisateur pour le trafic de la base, l'autre sur le
+\gls{reseaugestion} (\texttt{management\_\allowbreak networks}) pour le dialogue avec le plan de contrôle. Trove vérifie que le sous-réseau de
+l'utilisateur n'entre pas en conflit avec celui de gestion. Aucun trafic entrant n'est nécessaire sur le port de gestion : l'agent
+initie lui-même les connexions vers RabbitMQ (un accès SSH depuis le contrôleur, port 22, aide seulement au diagnostic)
+\parencite{trove-production}. L'option \texttt{network\_isolation} (valeur par défaut vraie, depuis Bobcat) pousse l'isolation plus
+loin (figure~\ref{fig:tr-reseau}) \parencite{trove-netiso}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pgris, minimum width=5.8cm] (t1) at (3.2,5.4) {Réseau de l'utilisateur};
+  \node[pgris, minimum width=5.8cm] (g1) at (3.2,0.0) {Réseau de gestion};
+  \begin{scope}[on background layer]
+    \node[draw=insagris, dashed, rounded corners=4pt, fill=insagris!4, fit={(0.2,0.9) (6.2,4.4)}] {};
+  \end{scope}
+  \node[anchor=south east, font=\scriptsize\bfseries, text=insagris] at (6.1,0.95) {Machine invitée};
+  \node[pgris, minimum width=2.2cm] (n1) at (1.8,3.1) {NAT\\ {\scriptsize\mdseries Docker}};
+  \node[pdat, minimum width=2.2cm] (c1) at (4.8,3.1) {Conteneur\\ {\scriptsize\mdseries moteur}};
+  \node[psvc, minimum width=2.2cm] (a1) at (3.2,1.6) {Agent};
+  \draw[fluxr] (t1.south -| n1) -- (n1.north);
+  \draw[fluxr] (n1) -- (c1);
+  \draw[fluxo] (g1.north) -- (a1.south);
+  \node[font=\scriptsize\bfseries, text=insarouge] at (3.2,6.3) {\texttt{network\_isolation = False}};
+  \node[pgris, minimum width=5.8cm] (t2) at (10.8,5.4) {Réseau de l'utilisateur};
+  \node[pgris, minimum width=5.8cm] (g2) at (10.8,0.0) {Réseau de gestion};
+  \begin{scope}[on background layer]
+    \node[draw=insagris, dashed, rounded corners=4pt, fill=insagris!4, fit={(7.8,0.9) (13.8,4.4)}] {};
+  \end{scope}
+  \node[anchor=south east, font=\scriptsize\bfseries, text=insagris] at (13.7,0.95) {Machine invitée};
+  \node[pdat, minimum width=2.4cm] (c2) at (12.4,3.0) {Conteneur\\ {\scriptsize\mdseries moteur}};
+  \node[psvc, minimum width=2.2cm] (a2) at (9.2,1.6) {Agent};
+  \draw[fluxr] (t2.south -| c2) -- (c2.north);
+  \draw[fluxo] (g2.north) -- (a2.south);
+  \node[font=\scriptsize\bfseries, text=insarouge] at (10.8,6.3) {\texttt{network\_isolation = True} (défaut)};
+  \node[callout, minimum width=14.6cm] at (7.0,-1.1)
+    {Avec l'isolation, la machine perd son interface côté utilisateur : seul le conteneur du moteur y est branché.};
+\end{tikzpicture}}
+\caption{Le trafic du client traverse la machine (traduction d'adresses de Docker, à gauche) ou rejoint directement le conteneur du
+moteur (à droite) ; dans les deux cas, l'agent n'utilise que le réseau de gestion.}
+\label{fig:tr-reseau}
+\end{figure}
+
+Sans isolation, la machine garde l'interface fournie par Nova, et un NAT de Docker redirige les ports vers le conteneur. Avec
+l'isolation, la machine n'a plus que l'interface de gestion, sans route par défaut ; l'interface de l'utilisateur est branchée
+directement au conteneur. Le réseau de gestion doit alors donner accès à RabbitMQ et au registre Docker ; la fonction n'est pas
+compatible avec d'anciennes images invitées, qu'il faut reconstruire \parencite{trove-netiso}. Le tableau~\ref{tab:tr-secu} résume les
+menaces et les mesures.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{10.9cm}@{}}
+\toprule
+\textbf{Menace} & \textbf{Mesure} \\
+\midrule
+Accès aux ressources sous-jacentes (machine, volume, ports) & Déploiement dans le projet de service (par défaut depuis Ussuri) : l'utilisateur ne voit que l'instance Trove et ne la pilote que par l'API \parencite{trove-production}. \\
+Compromission d'une instance, donc des identifiants RabbitMQ de son agent & Messages RPC chiffrés (\texttt{enable\_\allowbreak secure\_\allowbreak rpc\_\allowbreak messaging}, vrai par défaut) : une clé pour le taskmanager et une clé par instance. Il faut remplacer les clés par défaut \texttt{taskmanager\_\allowbreak rpc\_\allowbreak encr\_\allowbreak key} et \texttt{inst\_\allowbreak rpc\_\allowbreak key\_\allowbreak encr\_\allowbreak key} \parencite{trove-secure-rpc}. \\
+Mélange du trafic du client et de gestion & Réseau de gestion, groupe de sécurité dédié, \texttt{network\_isolation} \parencite{trove-netiso}. \\
+Écoute du trafic entre le client et la base & \gls{tls} activable par instance, avec un certificat conservé dans Barbican : mode \texttt{basic} (SSL facultatif), \texttt{enforced} (obligatoire) ou \texttt{mtls} (certificat client exigé) \parencite{trove-ssl}. \\
+Accès depuis l'extérieur & \texttt{--is-public} avec \texttt{--allowed-cidr}, groupes de sécurité \parencite{trove-create}. \\
+Consommation excessive & Quotas propres à Trove (et non à Keystone) : par défaut 10 instances, 40 Go de volumes, 50 sauvegardes par projet ; la mémoire totale n'est pas limitée \parencite{trove-source}. \\
+\bottomrule
+\end{tabular}
+\caption{Menaces et mesures pour Trove.}
+\label{tab:tr-secu}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre et exploitation}\label{sec:tr-deploiement}
+% ---------------------------------------------------------------------
+
+L'installation s'appuie sur MySQL, RabbitMQ, Keystone, Nova, Cinder, Neutron, Glance et Swift \parencite{trove-production}. On crée la base
+\texttt{trove}, l'utilisateur \texttt{trove} (rôle \texttt{admin} du projet \texttt{service}), le service \texttt{database} et ses
+endpoints (port 8779, chemin \texttt{/v1.0/\%(tenant\_\allowbreak id)s}). On installe \texttt{trove-api}, \texttt{trove-taskmanager},
+\texttt{trove-conductor} et le client, on configure, puis on crée le schéma avec \texttt{trove-manage db\_sync}
+\parencite{trove-install-ubuntu}. Les paquets Ubuntu ne sont pas toujours à jour : l'installation depuis les sources, en conteneur ou
+dans un environnement Python virtuel, est recommandée \parencite{trove-install-ubuntu}.
+
+{\emergencystretch=3em
+La configuration tient pour l'essentiel dans \texttt{/etc/trove/trove.conf} (extrait ci-dessous). Les sections
+\texttt{[keystone\_\allowbreak authtoken]} et \texttt{[service\_\allowbreak credentials]} authentifient Trove ; le fichier de l'agent
+(\texttt{/etc/trove/trove-\allowbreak guestagent.conf}) donne à chaque future instance l'accès à la file de messages. Le sous-réseau de gestion
+doit être assez grand pour toutes les instances et tous les contrôleurs de la durée de vie du cloud ; on exécute plusieurs copies
+de chaque service du contrôleur pour la capacité et la disponibilité \parencite{trove-production,trove-install-ubuntu}.
+\par}
+
+La montée de version suit cinq étapes : construire une nouvelle image invitée, migrer la base de Trove, mettre à jour les services
+du contrôleur, enregistrer une version de datastore fondée sur la nouvelle image, puis mettre à niveau les instances
+(\texttt{database instance upgrade}). Un contrôleur plus récent ne dialogue plus avec un agent ancien quand l'interface change,
+d'où l'image à reconstruire \parencite{trove-upgrade}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/trove/trove.conf (extrait)
+[DEFAULT]
+network_driver = trove.network.neutron.NeutronDriver
+management_networks = MGMT_NET_ID
+management_security_groups = MGMT_SG_ID
+nova_keypair = trove-mgmt
+default_datastore = mysql
+transport_url = rabbit://openstack:RABBIT_PASS@controller:5672/
+[database]
+connection = mysql+pymysql://trove:TROVE_DBPASS@controller/trove
+[service_credentials]
+auth_url = http://controller:5000/v3
+username = trove
+password = TROVE_PASS
+project_name = service
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Dépannage}\label{sec:tr-pannes}
+% ---------------------------------------------------------------------
+
+La panne la plus courante est une instance bloquée en \texttt{BUILD} : l'agent ne joint pas RabbitMQ, ou souffre d'un défaut, et ne peut
+donc pas signaler son état \parencite{trove-troubleshooting}. Si la file fonctionne, l'administrateur publie le journal de l'agent dans
+Swift et le télécharge ; sinon il se connecte en SSH à la machine par son port de gestion (clé \texttt{nova\_keypair}, port 22 autorisé par
+le groupe de sécurité de gestion) :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack database log list $DB_ID
+$ openstack database log set $DB_ID guest --publish
+$ openstack database log save $DB_ID guest --file guest.log
+$ ssh ubuntu@$MGMT_IP sudo journalctl -u guest-agent.service
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{6.4cm}>{\raggedright\arraybackslash}p{5.5cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Instance bloquée en \texttt{BUILD}, puis \texttt{ERROR} & L'agent ne joint pas RabbitMQ (routage du réseau de gestion, identifiants), ou erreur de l'agent. & Journal de l'agent (\texttt{log set \dots{} --publish} ou SSH) \\
+\texttt{ACTIVE} mais statut d'exploitation \texttt{SHUTDOWN} & Le moteur est arrêté ou planté dans son conteneur. & \texttt{docker ps} dans la machine ; journal du moteur (\texttt{database log list}) \\
+Création sans fin ou machine sans moteur & La machine n'atteint pas le registre Docker (image du moteur) ou l'image invitée est inadaptée. & Accès au registre depuis le réseau de gestion ; \texttt{docker\_image} du datastore \\
+Création refusée & Quota de Trove atteint (instances, volumes, sauvegardes). & \texttt{openstack database quota show P} ; \texttt{database limit list} \\
+Client sans accès à la base & Plage non autorisée, groupe de sécurité, isolation réseau. & \texttt{instance show} (\texttt{allowed\_cidrs}, adresses) ; \texttt{ip netns} dans la machine \\
+Sauvegarde bloquée ou incrémentale en échec & Sauvegarde \texttt{RUNNING} non expirée ; WAL du parent purgé (PostgreSQL). & \texttt{instance show -c fault} ; refaire une sauvegarde complète \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Trove \parencite{trove-troubleshooting,trove-backup,trove-netiso}.}
+\label{tab:tr-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Comparaison, limites et alternatives}\label{sec:tr-compar}
+% ---------------------------------------------------------------------
+
+Trove vise le même service que RDS ou Cloud SQL, mais sur une infrastructure que l'on possède (tableau~\ref{tab:tr-compar}). Les services
+publics décrivent l'automatisation des sauvegardes, de la réplication et des correctifs comme leur raison d'être
+\parencite{aws-rds,gcp-cloudsql} ; Trove en fournit une part (sauvegardes, réplication manuelle, mise à niveau), pas la reprise
+automatique sur panne.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{6.2cm}>{\raggedright\arraybackslash}p{6.3cm}@{}}
+\toprule
+\textbf{Critère} & \textbf{Trove} & \textbf{RDS, Cloud SQL} \\
+\midrule
+Moteurs & MySQL, MariaDB, PostgreSQL (matrice testée). & Offre plus large, entretenue par le fournisseur (Cloud SQL : MySQL, PostgreSQL, SQL Server). \\
+Haute disponibilité & Réplication asynchrone ; bascule déclenchée par l'opérateur. & Réplication et reprise gérées par le service. \\
+Intégration & Native à OpenStack : Keystone, Nova, Cinder, Neutron, Swift, Barbican. & Native au cloud public concerné. \\
+Coût et contrôle & Coût de l'infrastructure ; contrôle total des images, du réseau, de la localisation des données. & Facturation à l'usage ; moins de contrôle. \\
+\bottomrule
+\end{tabular}
+\caption{Trove face aux services managés du cloud public \parencite{trove-datastore,trove-replication,aws-rds,gcp-cloudsql}.}
+\label{tab:tr-compar}
+\end{table}
+
+Les limites documentées du service sont : trois moteurs testés ; clustering expérimental ; pas de bascule automatique ni de réplique
+de réplique ; API des bases et utilisateurs réservée à MySQL ; images invitées à reconstruire à chaque évolution des interfaces ;
+dépendance à un registre Docker joignable \parencite{trove-datastore,trove-replication,trove-users,trove-upgrade}. Les alternatives sont :
+gérer soi-même la base sur une machine Nova (plus de travail d'exploitation) ; déployer sur un cluster Kubernetes de Magnum
+(chapitre~\ref{chap:magnum}) un \gls{operateurk8s} de base de données, comme CloudNativePG pour PostgreSQL \parencite{cloudnativepg} ou
+l'opérateur de Percona ; recourir à un service managé tiers ; ou prendre un service de cloud public si l'infrastructure n'est pas
+contrainte à OpenStack.
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:tr-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Déployer une base MySQL}\label{ex:tr-deployer}
+Créer l'instance \texttt{shop-db} (flavor \texttt{d2}, volume de 10 Go, réseau \texttt{\$NET\_ID}, MySQL 8.4) avec la base \texttt{shop}
+et l'utilisateur \texttt{shopuser}, accessible seulement depuis \texttt{10.1.0.0/24}. Comment connaître son adresse et savoir qu'elle
+est utilisable ?
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}
+$ openstack database instance create shop-db \
+    --flavor d2 --size 10 --nic net-id=$NET_ID \
+    --datastore mysql --datastore-version 8.4 \
+    --databases shop --users shopuser:SECRET \
+    --is-public --allowed-cidr 10.1.0.0/24
+$ openstack database instance show shop-db
+\end{lstlisting}
+L'adresse est dans le champ \texttt{addresses} (ou \texttt{ip}) de \texttt{instance show}. L'instance est utilisable quand son statut est
+\texttt{ACTIVE} \emph{et} son statut d'exploitation \texttt{HEALTHY} : tant que l'agent n'a pas signalé que le moteur tourne, ce second champ est vide.
+\end{correction}
+
+\begin{exercice}{Sauvegarder puis restaurer}\label{ex:tr-sauv}
+Faire une sauvegarde complète de \texttt{shop-db}, puis une incrémentale, et restaurer la dernière dans une nouvelle instance
+\texttt{shop-db2}. Pourquoi la restauration ne remplace-t-elle pas l'instance d'origine ? Que se passe-t-il si quelqu'un vide le conteneur
+Swift ?
+\end{exercice}
+\newpage
+\begin{correction}
+\begin{lstlisting}
+$ openstack database backup create full-1 --instance shop-db
+$ openstack database backup create inc-1 --instance shop-db \
+    --parent $(openstack database backup show full-1 \
+               -f value -c id)
+$ openstack database instance create shop-db2 --flavor d2 \
+    --size 10 --nic net-id=$NET_ID --datastore mysql \
+    --datastore-version 8.4 --backup inc-1
+\end{lstlisting}
+La restauration crée toujours une nouvelle instance, avec sa machine et son adresse ; l'ancienne reste inchangée et l'on redirige les
+applications. Trove applique la chaîne complète (\texttt{full-1}, puis \texttt{inc-1}). Si les objets du conteneur Swift sont supprimés à la
+main, la restauration devient impossible.
+\end{correction}
+
+\begin{exercice}{Primaire en panne}\label{ex:tr-bascule}
+\texttt{shop-db} a deux répliques saines, \texttt{shop-db-r1} et \texttt{shop-db-r2} ; sa machine est tombée (statut d'exploitation
+\texttt{SHUTDOWN}) et ne reviendra pas. Quelle commande rétablit un primaire ? Quelles actions restent à la charge de l'opérateur ?
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}
+$ openstack database instance eject shop-db
+$ openstack database instance list -c Name -c Status \
+    -c "Operating Status" -c Role
+\end{lstlisting}
+\texttt{eject} évince le primaire défaillant : Trove élit un nouveau primaire parmi les répliques (statuts \texttt{EJECT}, puis retour à
+\texttt{HEALTHY}). Rien n'est automatique : l'opérateur lance la commande, oriente les applications vers la nouvelle chaîne de connexion
+(chaque serveur en a une), puis recrée une réplique avec \texttt{--replica-of}. Comme la réplication est asynchrone, les dernières
+transactions du primaire peuvent être perdues.
+\end{correction}
+
+\begin{exercice}{Instance bloquée en BUILD}\label{ex:tr-build}
+Une instance reste en \texttt{BUILD} bien après le délai habituel, puis passe en \texttt{ERROR}. \texttt{openstack server list} (administrateur)
+montre pourtant la machine en \texttt{ACTIVE}. D'où vient le problème, et comment le diagnostiquer ?
+\end{exercice}
+\begin{correction}
+La machine existe, mais l'agent n'a jamais signalé l'état du moteur au conductor : il ne joint probablement pas RabbitMQ (route du réseau de
+gestion, identifiants de son fichier de configuration), ou il a rencontré une erreur. Si la file fonctionne, on publie le journal de
+l'agent dans Swift (\texttt{database log set ID guest --publish}) puis on le télécharge (\texttt{log save}). Sinon, on récupère
+l'adresse du port de gestion de la machine (en administrateur), on s'y connecte en SSH avec la clé \texttt{nova\_keypair} (port 22 autorisé par
+le groupe de sécurité de gestion) et l'on lit \texttt{journalctl -u guest-agent.service}.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:tr-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Trove fournit des bases MySQL, MariaDB et PostgreSQL en tant que service ; chaque instance est une machine Nova, un volume Cinder
+        et un moteur dans un conteneur Docker.
+  \item L'API (8779) transmet au taskmanager par RPC ; le taskmanager provisionne par Nova, Cinder et Neutron ; l'agent de l'instance
+        exécute les ordres et signale son état au conductor.
+  \item Une instance a deux états : \texttt{status} (machine, tâche) et \texttt{operating\_status} (moteur) ; on attend \texttt{HEALTHY}.
+  \item Un datastore est lié à une image Glance (identifiant ou étiquettes) ; une seule image invitée sert tous les moteurs, qui viennent
+        d'images Docker.
+  \item Sauvegardes dans Swift (complètes ou incrémentales, restaurées dans une nouvelle instance) ; réplication asynchrone, sans bascule
+        automatique.
+  \item Sécurité : projet de service, messages RPC chiffrés, réseau de gestion et isolation réseau, TLS avec Barbican ; quotas propres à
+        Trove.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.8cm}>{\raggedright\arraybackslash}p{10.3cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer une instance & \texttt{openstack database instance create N --flavor F --size G --nic net-id=R --datastore D --datastore-version V} & \ref{sec:tr-role} \\
+Suivre l'état & \texttt{openstack database instance show I} (\texttt{status}, \texttt{operating\_status}) & \ref{sec:tr-cycle} \\
+Créer un groupe de configuration & \texttt{openstack database configuration create G '\{"k": v\}' --datastore D --datastore-version V} ; \texttt{configuration attach I G} & \ref{sec:tr-config} \\
+Sauvegarder, restaurer & \texttt{backup create N --instance I [--parent B]} ; \texttt{instance create \dots{} --backup B} & \ref{sec:tr-backup} \\
+Répliquer, basculer & \texttt{instance create \dots{} --replica-of I} ; \texttt{instance promote R} ; \texttt{instance eject P} & \ref{sec:tr-replication} \\
+Mettre à niveau & \texttt{instance upgrade I VERSION} & \ref{sec:tr-cycle} \\
+Enregistrer un datastore & \texttt{datastore version create V D M "" --image-tags T} ; \texttt{trove-manage db\_load\_datastore\_config\_parameters} & \ref{sec:tr-datastores} \\
+Appliquer le schéma de base & \texttt{trove-manage db\_sync} & \ref{sec:tr-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Créer une instance, lire son adresse et savoir quand elle est utilisable (exercice~\ref{ex:tr-deployer}).
+  \item Sauvegarder, restaurer dans une nouvelle instance et expliquer la chaîne incrémentale (exercice~\ref{ex:tr-sauv}).
+  \item Rétablir un primaire après une panne avec \texttt{eject} et citer ce qui reste manuel (exercice~\ref{ex:tr-bascule}).
+  \item Diagnostiquer une instance bloquée en \texttt{BUILD} par les journaux de l'agent (exercice~\ref{ex:tr-build}).
+\end{itemize}
+\end{savoirfaire}
