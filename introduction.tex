@@ -2,49 +2,107 @@
 %  Introduction : importée par main.tex avec \include{introduction}.
 %  Section non numérotée, ajoutée au sommaire. Pas de figure flottante ici
 %  (la numérotation des figures suit celle des chapitres) : le plan est un
-%  dessin TikZ en place.
+%  dessin TikZ en place. Les numéros de chapitre sont des \ref : ils suivent
+%  l'ordre des \include de main.tex.
 % =====================================================================
 
 \phantomsection
 \section*{Introduction}
 \addcontentsline{toc}{section}{Introduction}
 
-Ce document rassemble les notes d'un cours consacré à OpenStack, plateforme de
-\gls{iaas} open source, et à ses principaux services. Il part d'une présentation générale
-(cloud, virtualisation, architecture) puis consacre un chapitre à chaque service :
-identité (Keystone), calcul (Nova, Placement), images (Glance), réseau (Neutron),
-stockage bloc et objet (Cinder, Swift), tableau de bord (Horizon), répartition de charge
-(Octavia), orchestration (Heat), bare metal (Ironic), Kubernetes managé (Magnum) et bases
-de données (Trove). Un dernier chapitre présente les méthodes de déploiement.
+Une entreprise, une université ou un opérateur qui exploite des centaines de serveurs ne peut pas créer à la main les milliers de
+machines virtuelles, de réseaux et de disques dont ses équipes ont besoin. OpenStack répond à ce besoin : c'est un ensemble de
+logiciels libres qui forment une plateforme de cloud de type \gls{iaas}, où chaque utilisateur obtient en quelques secondes, par une
+API ou par une interface web, des machines, des réseaux et du stockage, dans la limite de ses droits. OpenStack ne remplace ni
+l'hyperviseur ni les autres logiciels sur lesquels il repose : il les coordonne.
+
+Ce document rassemble les notes d'un cours consacré à cette plateforme. Il se lit dans l'ordre, chaque chapitre s'appuyant sur ceux
+qui le précèdent, mais on peut aussi y revenir service par service grâce aux renvois et au glossaire.
+
+\paragraph{Objectifs.} À la fin du cours, on sait :
+\begin{itemize}
+  \item expliquer ce qu'est OpenStack, où il se situe (IaaS, cloud privé) et pourquoi il n'est pas un hyperviseur ;
+  \item citer les principaux services, dire ce que fait chacun et comment ils communiquent (API REST, bus de messages, base de
+        données) ;
+  \item suivre une requête de bout en bout, de la commande \texttt{openstack} à la machine démarrée, et relier chaque commande au
+        service qui la traite ;
+  \item utiliser les services du socle (calcul, images, réseau, stockage), puis ceux qui s'appuient sur lui : répartition de charge,
+        orchestration, serveurs physiques, Kubernetes et bases de données à la demande ;
+  \item choisir un outil de déploiement, concevoir une topologie et préparer l'exploitation d'un cloud : haute disponibilité,
+        sauvegardes, mises à niveau.
+\end{itemize}
+
+\paragraph{Public et prérequis.} Le cours s'adresse à des étudiants de cinquième année en informatique, qui connaissent déjà
+Linux et la ligne de commande, les réseaux (adressage IP, VLAN, routage) et la virtualisation (machine virtuelle, hyperviseur). Des
+notions de HTTP et d'API REST aident, sans être indispensables. Aucune installation préalable n'est nécessaire pour lire le
+document ; pour pratiquer, un environnement DevStack d'une seule machine suffit (chapitre~\ref{chap:deploiement}).
+
+\paragraph{Un fil conducteur : obtenir une machine virtuelle.} Le plan suit la question que se pose tout utilisateur d'un cloud :
+que faut-il pour obtenir une machine virtuelle utilisable ? Les services sont présentés dans l'ordre où cette demande les sollicite
+(figure ci-dessous).
 
 \begin{center}
+\adjustbox{max width=\linewidth}{%
 \begin{tikzpicture}[>=Stealth, font=\scriptsize,
     boite/.style={draw=insarouge, fill=insarouge!6, thick, rounded corners=2pt,
-                  text width=3.35cm, minimum height=2.5cm, align=center},
+                  text width=2.85cm, minimum height=2.7cm, align=center, inner sep=4pt},
     num/.style={draw=insarouge, fill=insarouge, text=white, font=\scriptsize\bfseries,
                 rounded corners=2pt, minimum height=5.5mm, inner xsep=5pt}]
-  \node[boite] (b1) at (0,0)
-    {\textbf{Présentation générale}\\[3pt] cloud, IaaS, architecture d'OpenStack};
-  \node[boite] (b2) at (4,0)
-    {\textbf{Services de base}\\[3pt] Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia};
-  \node[boite] (b3) at (8,0)
-    {\textbf{Services avancés}\\[3pt] Swift, Heat, Ironic, Magnum, Trove};
-  \node[boite] (b4) at (12,0)
-    {\textbf{Déploiement}\\[3pt] DevStack, Kolla-Ansible, installation manuelle};
-  \node[num] at (0,1.55)  {chap.~\ref{chap:presentation}};
-  \node[num] at (4,1.55)  {chap.~\ref{chap:keystone}--\ref{chap:octavia}};
-  \node[num] at (8,1.55)  {chap.~\ref{chap:swift}--\ref{chap:trove}};
-  \node[num] at (12,1.55) {chap.~\ref{chap:deploiement}};
-  \foreach \i/\j in {1/2, 2/3, 3/4}
+  \node[boite] (b1) at (0,0)    {\textbf{\footnotesize Fondations}\\[3pt] Présentation générale\\ Keystone\\[3pt]
+                                  \textit{la carte et l'identité}};
+  \node[boite] (b2) at (3.7,0)  {\textbf{\footnotesize Le socle IaaS}\\[3pt] Nova, Placement\\ Glance, Neutron\\ Cinder, Swift\\[3pt]
+                                  \textit{calcul, images, réseau, stockage}};
+  \node[boite] (b3) at (7.4,0)  {\textbf{\footnotesize Exploiter le cloud}\\[3pt] Horizon\\ Octavia\\ Heat\\[3pt]
+                                  \textit{interface, répartition, orchestration}};
+  \node[boite] (b4) at (11.1,0) {\textbf{\footnotesize Services de plateforme}\\[3pt] Ironic\\ Magnum\\ Trove\\[3pt]
+                                  \textit{bare metal, Kubernetes, bases de données}};
+  \node[boite] (b5) at (14.8,0) {\textbf{\footnotesize Mettre en œuvre}\\[3pt] Méthodes de déploiement\\[3pt]
+                                  \textit{installer, exploiter, mettre à niveau}};
+  \node[num] at (0,1.55)    {partie I : chap.~\ref{chap:presentation}--\ref{chap:keystone}};
+  \node[num] at (3.7,1.55)  {II : chap.~\ref{chap:nova}--\ref{chap:swift}};
+  \node[num] at (7.4,1.55)  {III : chap.~\ref{chap:horizon}--\ref{chap:heat}};
+  \node[num] at (11.1,1.55) {IV : chap.~\ref{chap:ironic}--\ref{chap:trove}};
+  \node[num] at (14.8,1.55) {V : chap.~\ref{chap:deploiement}};
+  \foreach \i/\j in {1/2, 2/3, 3/4, 4/5}
     \draw[->, insarouge, thick] (b\i.east) -- (b\j.west);
-\end{tikzpicture}
+  \node[draw=insagris, fill=insagris!8, thick, rounded corners=2pt, minimum width=17.4cm, minimum height=0.7cm]
+    at (7.4,-2.1) {\textbf{Conclusion} : la carte d'ensemble, un scénario de bout en bout, les principes communs, choisir et poursuivre};
+\end{tikzpicture}}
 \end{center}
 
-Les termes techniques sont définis dans le glossaire, en fin de document ; la
-documentation officielle d'OpenStack \parencite{openstack-docs} sert de référence commune
-à tous les chapitres.
+La \textbf{partie~I} donne la carte d'ensemble puis présente Keystone, par lequel passe chaque appel. La \textbf{partie~II} suit la
+machine pas à pas : où la placer (Nova et Placement), à partir de quelle image (Glance), sur quel réseau (Neutron), avec quels
+disques (Cinder pour les volumes, Swift pour les objets). La \textbf{partie~III} regroupe ce qui permet de l'exploiter au quotidien :
+le tableau de bord, la répartition de charge et l'orchestration. La \textbf{partie~IV} décrit des services bâtis sur le socle, qui
+fournissent des serveurs physiques, des clusters Kubernetes et des bases de données. La \textbf{partie~V} ferme la boucle : installer,
+exploiter et mettre à niveau le tout. La conclusion reprend l'ensemble sur une carte et un scénario, et propose des suites.
 
-\paragraph{Prérequis et conventions.} Notions de Linux et de ligne de commande,
-de réseau (adressage IP, VLAN, routage) et de virtualisation (machine virtuelle,
-hyperviseur). Les exemples de commandes utilisent le client en ligne de commande
-unifié \texttt{openstack}.
+\paragraph{Comment lire ce document.} Après les deux chapitres de fondations, chaque chapitre est consacré à un service et se lit
+presque seul. Sa première section pose le problème que le service résout, son rôle, les services avec lesquels il communique et
+un exemple : elle suffit pour une première découverte. Viennent ensuite les concepts, l'architecture, les commandes, la mise en œuvre
+et le diagnostic. Chaque chapitre se termine par des exercices corrigés, un encadré « À retenir » et la liste des « Savoir-faire ».
+Le tableau ci-dessous propose trois parcours.
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{6.4cm}>{\raggedright\arraybackslash}p{5.6cm}@{}}
+\toprule
+\textbf{Parcours} & \textbf{Chapitres} & \textbf{Pour qui} \\
+\midrule
+Découvrir OpenStack & \ref{chap:presentation}, puis la première section des chapitres \ref{chap:keystone}, \ref{chap:nova},
+  \ref{chap:neutron}, \ref{chap:cinder} et \ref{chap:horizon} & Une première lecture, en quelques heures. \\
+Utiliser un cloud & \ref{chap:presentation} à \ref{chap:heat} (parties~\ref{part:fondations} à \ref{part:exploiter}) & Développeur ou ingénieur
+  logiciel qui déploie ses applications. \\
+Construire et exploiter & Tout le document, avec les parties~\ref{part:fondations}, \ref{part:socle} et \ref{part:miseenoeuvre} en priorité &
+  Administrateur, ingénieur d'exploitation. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Conventions.} Les commandes du client unifié \texttt{openstack} sont précédées de \texttt{\$} ; les extraits de
+configuration sont donnés sans invite. Les adresses (par exemple \texttt{10.0.0.11}) et les noms (\texttt{vm1}, \texttt{private}) sont des
+exemples. Les termes imprimés en rouge sont définis dans le glossaire, en fin de document. Les références entre parenthèses renvoient à la bibliographie, qui rassemble la documentation officielle
+d'OpenStack \parencite{openstack-docs} et d'autres sources consultées en octobre 2026. Les informations suivent les versions
+actuelles d'OpenStack (2026.1 et 2026.2) ; une version plus récente peut en modifier certains détails, et la documentation du
+projet fait alors foi.
+

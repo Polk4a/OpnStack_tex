@@ -10,14 +10,18 @@
 %  officielle de Nova (voir sources.bib). Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+\part{Le socle IaaS}\label{part:socle}
+\partdesc{Les services qui fournissent le calcul, les images, le réseau et le stockage : de quoi démarrer une machine virtuelle, la relier à un réseau et lui attacher des disques.}
+
 % =====================================================================
 \section{Nova : le service de calcul}\label{chap:nova}
 % =====================================================================
 
-Nova crée et gère les machines virtuelles d'OpenStack. Ce chapitre situe Nova parmi les autres services,
-présente ses concepts (instance, gabarit, nœud de calcul) et ses composants, puis suit la création d'une
-instance, de la requête au démarrage de la machine. Il explique ensuite le choix de l'hôte par
-l'ordonnanceur, le cycle de vie d'une instance et la mise en œuvre. Placement, qui tient l'inventaire des
+Une fois l'utilisateur authentifié par Keystone (chapitre~\ref{chap:keystone}), la première chose qu'il demande à un cloud est
+une machine virtuelle : c'est le travail de Nova, qui ouvre la partie consacrée au socle IaaS. Nova crée et gère les machines
+virtuelles d'OpenStack. Ce chapitre situe Nova parmi les autres services, présente ses concepts (instance, gabarit, nœud de
+calcul) et ses composants, puis suit la création d'une instance, de la requête au démarrage de la machine. Il explique ensuite
+le choix de l'hôte par l'ordonnanceur, le cycle de vie d'une instance et la mise en œuvre. Placement, qui tient l'inventaire des
 ressources, a son propre chapitre (chapitre~\ref{chap:placement}).
 
 % ---------------------------------------------------------------------

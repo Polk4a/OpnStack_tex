@@ -18,9 +18,11 @@
 \renewcommand{\theHfigure}{C.\arabic{figure}}\renewcommand{\theHtable}{C.\arabic{table}}
 
 Ce cours a présenté OpenStack comme une famille de services indépendants qui, ensemble, transforment des serveurs, des disques et
-des réseaux en un cloud en libre-service. Il est parti de l'identité (Keystone), a suivi la vie d'une machine virtuelle (Nova,
-Placement, Glance, Neutron, Cinder), puis a élargi le regard aux services bâtis sur ce socle (Horizon, Octavia, Swift, Heat, Ironic,
-Magnum, Trove) et s'est achevé du côté de l'administrateur, avec le déploiement. Cette conclusion rassemble l'ensemble : une carte,
+des réseaux en un cloud en libre-service. Il est parti de la carte d'ensemble et de l'identité (Keystone, partie~\ref{part:fondations}),
+a suivi la vie d'une machine virtuelle à travers le socle IaaS (Nova, Placement, Glance, Neutron, Cinder, Swift,
+partie~\ref{part:socle}), puis a présenté les services qui permettent d'exploiter le cloud (Horizon, Octavia, Heat,
+partie~\ref{part:exploiter}) et ceux qui fournissent d'autres ressources au-dessus du socle (Ironic, Magnum, Trove,
+partie~\ref{part:plateformes}). Il s'est achevé du côté de l'administrateur, avec le déploiement (partie~\ref{part:miseenoeuvre}). Cette conclusion rassemble l'ensemble : une carte,
 un scénario de bout en bout, les principes qui reviennent d'un service à l'autre, des repères pour choisir et exploiter, puis les
 limites de la plateforme, ce que le cours n'a pas traité et la manière de poursuivre.
 
@@ -28,7 +30,8 @@ limites de la plateforme, ce que le cours n'a pas traité et la manière de pour
 \subsection*{La carte d'ensemble}
 % ---------------------------------------------------------------------
 
-La figure~\ref{fig:concl-carte} range les services par rôle. Tous reposent sur la même infrastructure (base de données, file de
+La figure~\ref{fig:concl-carte} reprend la carte du chapitre~\ref{chap:presentation} (figure~\ref{fig:pres-archi}) en y ajoutant les
+numéros de chapitre. Tous les services reposent sur la même infrastructure (base de données, file de
 messages, cache) et sur Keystone, qui authentifie chaque appel ; l'outil de déploiement installe et met à jour le tout. Le
 tableau~\ref{tab:concl-services} rappelle, pour chaque service, son rôle et les processus à connaître.
 
@@ -38,18 +41,18 @@ tableau~\ref{tab:concl-services} rappelle, pour chaque service, son rôle et les
 \begin{tikzpicture}[>=Stealth, font=\footnotesize]
   \node[pcli, minimum width=13.0cm] at (8.5,8.3)
     {Utilisateurs \ $\cdot$ \ ligne de commande \ $\cdot$ \ API REST \ $\cdot$ \ Horizon (chap.~\ref{chap:horizon})};
-  % services applicatifs
-  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (3.5,6.8) {\textbf{Heat} {\scriptsize\mdseries(chap.~\ref{chap:heat})}\\ {\scriptsize\mdseries orchestration}};
-  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (6.85,6.8) {\textbf{Octavia} {\scriptsize\mdseries(chap.~\ref{chap:octavia})}\\ {\scriptsize\mdseries répartition de charge}};
-  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (10.2,6.8) {\textbf{Magnum} {\scriptsize\mdseries(chap.~\ref{chap:magnum})}\\ {\scriptsize\mdseries Kubernetes managé}};
-  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (13.55,6.8) {\textbf{Trove} {\scriptsize\mdseries(chap.~\ref{chap:trove})}\\ {\scriptsize\mdseries bases de données}};
+  % services d'exploitation et de plateforme
+  \node[psvc, minimum width=2.6cm, minimum height=1.1cm, inner xsep=2pt] at (2.7,6.8) {\textbf{Heat} {\scriptsize\mdseries(chap.~\ref{chap:heat})}\\ {\scriptsize\mdseries orchestration}};
+  \node[psvc, minimum width=2.6cm, minimum height=1.1cm, inner xsep=2pt] at (5.6,6.8) {\textbf{Octavia} {\scriptsize\mdseries(chap.~\ref{chap:octavia})}\\ {\scriptsize\mdseries répartition de charge}};
+  \node[psvc, minimum width=2.6cm, minimum height=1.1cm, inner xsep=2pt] at (8.5,6.8) {\textbf{Ironic} {\scriptsize\mdseries(chap.~\ref{chap:ironic})}\\ {\scriptsize\mdseries machines physiques}};
+  \node[psvc, minimum width=2.6cm, minimum height=1.1cm, inner xsep=2pt] at (11.4,6.8) {\textbf{Magnum} {\scriptsize\mdseries(chap.~\ref{chap:magnum})}\\ {\scriptsize\mdseries Kubernetes managé}};
+  \node[psvc, minimum width=2.6cm, minimum height=1.1cm, inner xsep=2pt] at (14.3,6.8) {\textbf{Trove} {\scriptsize\mdseries(chap.~\ref{chap:trove})}\\ {\scriptsize\mdseries bases de données}};
   % services de base
   \node[pfoc, minimum width=3.75cm, minimum height=1.1cm] at (4.5,5.2) {Nova, Placement\\ {\scriptsize\mdseries calcul (chap.~\ref{chap:nova}, \ref{chap:placement})}};
   \node[pfoc, minimum width=3.75cm, minimum height=1.1cm] at (8.5,5.2) {Neutron\\ {\scriptsize\mdseries réseau (chap.~\ref{chap:neutron})}};
   \node[pfoc, minimum width=3.75cm, minimum height=1.1cm] at (12.5,5.2) {Glance\\ {\scriptsize\mdseries images (chap.~\ref{chap:glance})}};
-  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (4.5,3.75) {Cinder\\ {\scriptsize\mdseries volumes (chap.~\ref{chap:cinder})}};
-  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (8.5,3.75) {Swift\\ {\scriptsize\mdseries objets (chap.~\ref{chap:swift})}};
-  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (12.5,3.75) {Ironic\\ {\scriptsize\mdseries machines physiques (chap.~\ref{chap:ironic})}};
+  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (6.5,3.75) {Cinder\\ {\scriptsize\mdseries volumes (chap.~\ref{chap:cinder})}};
+  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (10.5,3.75) {Swift\\ {\scriptsize\mdseries objets (chap.~\ref{chap:swift})}};
   % infrastructure
   \node[pgris, minimum width=13.0cm, minimum height=0.95cm] at (8.5,2.3)
     {Infrastructure partagée\\ {\scriptsize\mdseries MariaDB \ $\cdot$ \ RabbitMQ \ $\cdot$ \ memcached \ $\cdot$ \ HAProxy}};
@@ -63,8 +66,9 @@ tableau~\ref{tab:concl-services} rappelle, pour chaque service, son rôle et les
   \node[callout, minimum width=16.4cm] at (8.5,-0.55)
     {Des services indépendants, une identité commune, une infrastructure partagée : la plateforme tient à ces trois choix.};
 \end{tikzpicture}}
-\caption{Les services d'OpenStack étudiés dans le cours. En rouge plein, le cœur d'un cloud (calcul, réseau, images) ; en pêche, les
-autres services ; en gris, ce qui les supporte.}
+\caption{Les services d'OpenStack étudiés dans le cours. En haut, les services d'exploitation et de plateforme (parties~\ref{part:exploiter}
+et~\ref{part:plateformes}) ; au milieu, le socle IaaS (partie~\ref{part:socle}), en rouge plein pour le cœur d'un cloud (calcul, réseau,
+images) ; en gris, ce qui les supporte.}
 \label{fig:concl-carte}
 \end{figure}
 
@@ -82,9 +86,9 @@ Placement & Inventaire et allocation des ressources & \texttt{placement-api} : f
 Glance & Images & \texttt{glance-api} et ses magasins & \ref{chap:glance} \\
 Neutron & Réseau & \texttt{neutron-server}, agents (L3, DHCP), OVS ou OVN & \ref{chap:neutron} \\
 Cinder & Volumes (stockage bloc) & \texttt{cinder-api}, \texttt{-scheduler}, \texttt{-volume}, \texttt{-backup} & \ref{chap:cinder} \\
+Swift & Stockage objet & Proxy, serveurs de comptes, de conteneurs et d'objets ; anneaux & \ref{chap:swift} \\
 Horizon & Tableau de bord & Application Django sous Apache (\texttt{mod\_wsgi}) & \ref{chap:horizon} \\
 Octavia & Répartition de charge & \texttt{octavia-api}, worker, health manager, housekeeping ; amphores & \ref{chap:octavia} \\
-Swift & Stockage objet & Proxy, serveurs de comptes, de conteneurs et d'objets ; anneaux & \ref{chap:swift} \\
 Heat & Orchestration & \texttt{heat-api}, \texttt{heat-engine} ; modèles HOT & \ref{chap:heat} \\
 Ironic & Machines physiques & \texttt{ironic-api}, \texttt{ironic-conductor}, agent \texttt{ironic-python-agent} & \ref{chap:ironic} \\
 Magnum & Clusters Kubernetes & \texttt{magnum-api}, \texttt{magnum-conductor} ; pilote de cluster & \ref{chap:magnum} \\
@@ -101,7 +105,8 @@ Outils & Installer, exploiter, mettre à niveau & Kolla-Ansible, OpenStack-Ansib
 % ---------------------------------------------------------------------
 
 Rien ne montre mieux la coopération des services qu'une demande ordinaire : une machine virtuelle dotée d'un disque de données et
-d'une adresse publique. Cinq commandes y suffisent ; la figure~\ref{fig:concl-seq} en suit les appels.
+d'une adresse publique. Le chapitre~\ref{chap:presentation} avait suivi la création d'une machine seule (figure~\ref{fig:pres-scenario}) ; ici, cinq
+commandes y ajoutent un volume et une adresse publique, et la figure~\ref{fig:concl-seq} en suit les appels.
 
 \par\noindent\begin{minipage}{\linewidth}
 \begin{lstlisting}[style=terminal]

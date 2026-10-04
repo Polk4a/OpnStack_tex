@@ -11,13 +11,19 @@
 %  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+\part{Services de plateforme}\label{part:plateformes}
+\partdesc{Des serveurs physiques, des clusters Kubernetes et des bases de données fournis comme des services, au-dessus du socle IaaS.}
+
 % =====================================================================
 \section{Ironic : le bare metal en tant que service}\label{chap:ironic}
 % =====================================================================
 
-Ironic fait des serveurs physiques une ressource du cloud : on les enregistre, puis on les attribue comme des instances.
-Ce chapitre présente son rôle, ses concepts (nœud, port, type de matériel, classe de ressources), son architecture, la machine
-à états d'un nœud, l'enrôlement et le déploiement, le nettoyage entre deux locataires, le réseau et la mise en œuvre \parencite{ironic-index}.
+Les parties précédentes ont traité de machines virtuelles. Les trois chapitres qui suivent présentent des services de
+plateforme, qui s'appuient sur le socle IaaS pour fournir autre chose : des serveurs physiques (Ironic), des clusters Kubernetes
+(Magnum) et des bases de données (Trove). Ironic fait des serveurs physiques une ressource du cloud : on les enregistre, puis on
+les attribue comme des instances. Ce chapitre présente son rôle, ses concepts (nœud, port, type de matériel, classe de
+ressources), son architecture, la machine à états d'un nœud, l'enrôlement et le déploiement, le nettoyage entre deux locataires,
+le réseau et la mise en œuvre \parencite{ironic-index}.
 
 % ---------------------------------------------------------------------
 \subsection{Rôle et place d'Ironic}\label{sec:ir-role}

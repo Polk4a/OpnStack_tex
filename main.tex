@@ -8,6 +8,11 @@
 %    l'introduction et la conclusion sont des \section* ajoutées au sommaire.
 %  - Un chapitre = un fichier chap_<nom>.tex. L'ordre des chapitres (et donc leur numéro)
 %    est celui des \include plus bas : pour réordonner, déplacer une ligne.
+%  - Le cours est découpé en cinq parties (\part), qui reprennent le fil de lecture :
+%    I Fondations, II Le socle IaaS, III Exploiter le cloud, IV Services de plateforme,
+%    V Mettre en œuvre. Chaque \part est écrite en tête du premier chapitre de la partie
+%    (chap_presentation, chap_nova, chap_horizon, chap_ironic, chap_deploiement), juste avant
+%    son \section : si l'on déplace ce chapitre, déplacer aussi la \part.
 %  - Nouveau document : modifier le bloc « Informations du document »,
 %    ajouter ou retirer des \include, décommenter les sections utiles
 %    (résumés, table des illustrations, annexes).
@@ -253,6 +258,28 @@
 \titlespacing*{\section}{0pt}{3ex plus 1ex minus .2ex}{1.8ex plus .2ex}
 \titlespacing*{\subsection}{0pt}{2.5ex plus 1ex minus .2ex}{1.2ex plus .2ex}
 \titlespacing*{\subsubsection}{0pt}{2ex plus .5ex minus .2ex}{1ex plus .2ex}
+% Parties (\part) : bandeau en tête du premier chapitre de la partie. La classe article ne saute pas de
+% page avant \part ; le chapitre commençant déjà en haut de page (\include), le bandeau y est placé.
+% \partdesc{...} ajoute une phrase de présentation sous le titre de la partie.
+\titleformat{\part}[display]
+  {\normalfont\bfseries\color{insarouge}}
+  {\fontsize{11}{13}\selectfont Partie~\thepart}{3pt}
+  {\fontsize{22}{26}\selectfont}
+  [{\vspace{0.6ex}\color{insagris}\titlerule[1.4pt]}]
+\titlespacing*{\part}{0pt}{0pt}{1.2ex}
+% Entrée de partie dans le sommaire : plus compacte que le réglage par défaut de la classe article
+\makeatletter
+\renewcommand*\l@part[2]{%
+  \ifnum \c@tocdepth >-2\relax
+    \addpenalty{-\@highpenalty}\addvspace{0.9em \@plus\p@}%
+    \begingroup\parindent\z@ \rightskip\@pnumwidth \parfillskip-\@pnumwidth
+      {\leavevmode\bfseries\color{insarouge} #1\hfil \hb@xt@\@pnumwidth{\hss #2}}\par\nobreak
+    \endgroup\@nobreaktrue % garde le titre de partie avec le premier chapitre qui suit
+  \fi}
+% numéros de sous-section à deux chiffres (12.10, 14.11\dots) : colonne de numéro un peu plus large
+\renewcommand*\l@subsection{\@dottedtocline{2}{1.5em}{2.8em}}
+\makeatother
+\newcommand{\partdesc}[1]{\par\noindent{\color{insagris}\itshape #1}\par\vspace{3ex}}
 
 %%%%% Pour le glossaire %%%%%
 \usepackage[hidelinks]{hyperref} %pour rendre les liens cliquables
@@ -341,27 +368,30 @@
 \include{introduction}
 
 %%%%% Chapitres (un fichier par chapitre, chacun commence par \section) %%%%%
-% -- Présentation générale
+% Chaque partie (\part) est écrite en tête de son premier chapitre.
+% -- Partie I : Fondations
 \include{chap_presentation} % 1. Présentation générale d'OpenStack
-
-% -- Services de base
 \include{chap_keystone}     % 2. Keystone : identité
+
+% -- Partie II : Le socle IaaS (calcul, images, réseau, stockage)
 \include{chap_nova}         % 3. Nova : calcul
 \include{chap_placement}    % 4. Placement : suivi des ressources
 \include{chap_glance}       % 5. Glance : images
 \include{chap_neutron}      % 6. Neutron : réseau
 \include{chap_cinder}       % 7. Cinder : stockage bloc
-\include{chap_horizon}      % 8. Horizon : tableau de bord
-\include{chap_octavia}      % 9. Octavia : répartition de charge
+\include{chap_swift}        % 8. Swift : stockage objet
 
-% -- Stockage objet, orchestration et services avancés
-\include{chap_swift}        % 10. Swift : stockage objet
+% -- Partie III : Exploiter le cloud (interface, répartition de charge, orchestration)
+\include{chap_horizon}      % 9. Horizon : tableau de bord
+\include{chap_octavia}      % 10. Octavia : répartition de charge
 \include{chap_heat}         % 11. Heat : orchestration
+
+% -- Partie IV : Services de plateforme
 \include{chap_ironic}       % 12. Ironic : bare metal
 \include{chap_magnum}       % 13. Magnum : Kubernetes managé
 \include{chap_trove}        % 14. Trove : bases de données (DBaaS)
 
-% -- Mise en œuvre
+% -- Partie V : Mettre en œuvre
 \include{chap_deploiement}  % 15. Méthodes de déploiement (hors service : retirer cette ligne si inutile)
 
 %%%%% Conclusion (section non numérotée, ajoutée au sommaire) %%%%%

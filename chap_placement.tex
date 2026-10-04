@@ -14,10 +14,11 @@
 \section{Placement : le suivi des ressources}\label{chap:placement}
 % =====================================================================
 
-Placement est le service qui sait ce que chaque serveur peut offrir et ce qui est déjà consommé. Nova
-l'interroge à chaque création d'instance. Ce chapitre présente son modèle de données (fournisseurs,
-inventaires, allocations), la façon dont on calcule la capacité d'un serveur, les requêtes que Nova lui
-adresse et la gestion des accès concurrents, puis l'installation et le diagnostic.
+Le chapitre précédent a montré que Nova choisit l'hôte d'une instance parmi les nœuds de calcul ; il le fait en interrogeant
+Placement. Placement est le service qui sait ce que chaque serveur peut offrir et ce qui est déjà consommé. Nova l'interroge à
+chaque création d'instance. Ce chapitre présente son modèle de données (fournisseurs, inventaires, allocations), la façon dont
+on calcule la capacité d'un serveur, les requêtes que Nova lui adresse et la gestion des accès concurrents, puis l'installation
+et le diagnostic.
 
 % ---------------------------------------------------------------------
 \subsection{Rôle et place de Placement}\label{sec:pl-role}

@@ -15,10 +15,11 @@
 \section{Neutron : le service réseau}\label{chap:neutron}
 % =====================================================================
 
-Neutron fournit le réseau des instances : réseaux, adresses, routeurs, pare-feu et adresses publiques. Ce chapitre présente
-d'abord les objets que voit l'utilisateur, puis la façon dont Neutron les réalise : types de réseaux, architecture en
-plugin ML2 et agents, et pilote OVN. Il suit ensuite la création d'un port pour une instance, détaille les groupes de
-sécurité et les IP flottantes, puis la mise en œuvre.
+Une machine démarrée à partir d'une image doit encore communiquer, avec les autres machines et avec l'extérieur. Neutron fournit
+le réseau des instances : réseaux, adresses, routeurs, pare-feu et adresses publiques. Ce chapitre présente d'abord les objets
+que voit l'utilisateur, puis la façon dont Neutron les réalise : types de réseaux, architecture en plugin ML2 et agents, et
+pilote OVN. Il suit ensuite la création d'un port pour une instance, détaille les groupes de sécurité et les IP flottantes, puis
+la mise en œuvre.
 
 % ---------------------------------------------------------------------
 \subsection{Rôle et place de Neutron}\label{sec:neu-role}

@@ -18,11 +18,12 @@
 \section{Trove : les bases de données en tant que service}\label{chap:trove}
 % =====================================================================
 
-Trove fait d'une base de données un service du cloud : l'utilisateur commande une instance MySQL, MariaDB ou PostgreSQL, et Trove
-s'occupe de la machine, du volume, du réseau, de la configuration, des sauvegardes et de la réplication. Ce chapitre présente son
-rôle, ses concepts, son architecture et l'instance invitée, les datastores et leurs images, le cycle de vie, les opérations
-courantes (configuration, sauvegardes, réplication), la sécurité, la mise en œuvre et le dépannage, puis situe Trove face aux offres
-du cloud public et à ses alternatives \parencite{trove-overview}.
+Comme Magnum, Trove s'appuie sur le socle : une base de données y tourne dans une instance de Nova, sur un volume de Cinder et
+un réseau de Neutron. Trove fait d'une base de données un service du cloud : l'utilisateur commande une instance MySQL, MariaDB
+ou PostgreSQL, et Trove s'occupe de la machine, du volume, du réseau, de la configuration, des sauvegardes et de la réplication.
+Ce chapitre présente son rôle, ses concepts, son architecture et l'instance invitée, les datastores et leurs images, le cycle de
+vie, les opérations courantes (configuration, sauvegardes, réplication), la sécurité, la mise en œuvre et le dépannage, puis
+situe Trove face aux offres du cloud public et à ses alternatives \parencite{trove-overview}.
 
 % ---------------------------------------------------------------------
 \subsection{Rôle et place de Trove}\label{sec:tr-role}

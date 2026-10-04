@@ -2,47 +2,751 @@
 %  Chapitre « Présentation générale d'OpenStack »
 %  Fichier importé par main.tex avec \include{chap_presentation}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, bus, flux) et les couleurs (insarouge, insagris,
+%  insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Premier chapitre du cours (≈ 10 pages) : vocabulaire, architecture d'ensemble,
+%  scénario de création d'une VM. Les chapitres suivants détaillent chaque service.
+%  Sources : support « Introduction à OpenStack », définition du NIST, documentation
+%  officielle d'OpenStack, de KVM, de Proxmox VE et de Kubernetes (voir sources.bib).
 % =====================================================================
 
-\section{Présentation générale d'OpenStack}\label{chap:presentation}
+\part{Fondations}\label{part:fondations}
+\partdesc{Ce que sont le cloud et OpenStack, comment ses services s'organisent et comment chacun s'authentifie auprès de Keystone, le service que tous les autres consultent.}
 
-% Squelette tiré du support « Introduction à OpenStack » : titres de sous-sections seulement.
+% =====================================================================
+\section{Présentation générale d'OpenStack}\label{chap:presentation}
+% =====================================================================
+
+Ce chapitre est le point d'entrée du cours. Il pose le vocabulaire (virtualisation, cloud, \gls{iaas}), situe OpenStack parmi les
+technologies voisines, décrit son architecture d'ensemble puis suit une commande, la création d'une machine virtuelle, à travers
+tous les services. Les chapitres suivants reprennent chaque service en détail ; celui-ci en donne la carte. Après l'avoir lu, on
+doit savoir répondre à cinq questions :
+
+\begin{itemize}
+  \item qu'est-ce qu'OpenStack, et pourquoi n'est-il pas un hyperviseur ?
+  \item quels sont ses principaux services, et quel est le rôle de chacun ?
+  \item comment communiquent-ils : API REST, bus de messages, base de données ?
+  \item comment les répartit-on sur des serveurs, et pourquoi séparer les réseaux ?
+  \item que se passe-t-il, service par service, quand on exécute \texttt{openstack server create} ?
+\end{itemize}
 
 % ---------------------------------------------------------------------
 \subsection{Du serveur physique au cloud}\label{sec:pres-cloud}
 % ---------------------------------------------------------------------
-% virtualisation, machines virtuelles, hyperviseur
+
+La virtualisation fait tourner plusieurs systèmes d'exploitation isolés sur une même machine physique. Chacun s'exécute dans une
+machine virtuelle (VM), qui se comporte comme un ordinateur complet (processeur, mémoire, disque, carte réseau) dont les
+ressources sont allouées par logiciel. Le logiciel qui crée les VM et répartit entre elles les ressources physiques est
+l'\gls{hyperviseur}. Il en existe deux familles :
+
+\begin{itemize}
+  \item \textbf{type 1 (\emph{bare metal})} : installé directement sur le matériel, comme \gls{kvm} (intégré au noyau Linux), ESXi ou
+        Xen ;
+  \item \textbf{type 2 (hébergé)} : installé au-dessus d'un système hôte, comme VirtualBox ou VMware Workstation.
+\end{itemize}
+
+Sur un seul serveur, l'administrateur crée ses VM à la main. Cela ne tient plus quand une organisation exploite des centaines de
+serveurs et des milliers de VM : sur quel serveur placer chaque machine, avec quel réseau et quel disque, et qui a le droit de la
+créer ? Faire ce travail machine par machine n'est pas envisageable (figure~\ref{fig:pres-echelle}). Il faut une couche qui
+automatise la création des machines, leur réseau, leur stockage et leur gestion, et qui laisse chaque utilisateur se servir seul.
+C'est ce que l'on appelle un \emph{cloud}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  % --- panneau de gauche : un serveur
+  \node[font=\footnotesize\bfseries, text=insagris] at (2.3,5.5) {Un serveur};
+  \draw[insagris, thick, rounded corners=3pt, fill=insagris!6] (0.1,1.9) rectangle (4.5,5.1);
+  \node[pcli, minimum width=1.0cm] at (1.0,4.4) {VM};
+  \node[pcli, minimum width=1.0cm] at (2.3,4.4) {VM};
+  \node[pcli, minimum width=1.0cm] at (3.6,4.4) {VM};
+  \node[pgris, minimum width=3.9cm] at (2.3,2.9) {Hyperviseur (KVM)};
+  \node[callout, text width=4.2cm] at (2.3,1.25) {On crée les machines à la main, une par une.};
+  % --- flèche de passage à l'échelle
+  \draw[fluxo, line width=1.6pt] (4.8,3.5) -- (6.2,3.5);
+  \node[etiqf, above=2pt] at (5.5,3.55) {×\,100};
+  % --- panneau de droite : un datacenter
+  \node[font=\footnotesize\bfseries, text=insagris] at (11.0,5.5) {Un datacenter : plus de 100 serveurs, des milliers de VM};
+  \foreach \i in {0,1,2,3,4}{
+    \foreach \j in {0,1}{
+      \node[draw=insagris, fill=insagris!8, thick, rounded corners=2pt, minimum width=1.25cm, minimum height=0.7cm,
+            font=\scriptsize] at ({7.1+1.45*\i},{4.55-0.95*\j}) {serveur};
+    }
+  }
+  \node[psvc, minimum width=3.0cm] at (8.2,2.35) {Où placer la VM ?};
+  \node[psvc, minimum width=3.0cm] at (11.9,2.35) {Quel réseau ?};
+  \node[psvc, minimum width=3.0cm] at (8.2,1.55) {Quel disque ?};
+  \node[psvc, minimum width=3.0cm] at (11.9,1.55) {Qui a le droit ?};
+  \node[callout, minimum width=11.4cm] at (6.75,-0.1)
+    {Il faut une plateforme qui automatise tout cela : c'est le rôle d'OpenStack.};
+\end{tikzpicture}}
+\caption{Le problème du passage à l'échelle. Un administrateur peut gérer à la main les machines d'un serveur ; sur un datacenter,
+il faut automatiser le placement, le réseau, le stockage et les droits d'accès.}
+\label{fig:pres-echelle}
+\end{figure}
+
+\begin{definition}{Cloud computing}
+Le NIST définit le \emph{cloud computing} comme un modèle d'accès par le réseau, à la demande, à un ensemble partagé de ressources
+informatiques configurables (réseaux, serveurs, stockage, applications, services), qui peuvent être mises à disposition et
+libérées rapidement, avec un minimum d'effort de gestion \parencite{nist-cloud}. Il lui attribue cinq caractéristiques : le
+\textbf{libre-service à la demande}, l'\textbf{accès par le réseau}, la \textbf{mutualisation des ressources}, l'\textbf{élasticité
+rapide} et le \textbf{service mesuré}.
+\end{definition}
+
+OpenStack en fournit les mécanismes : le libre-service par les API et par le tableau de bord, la mutualisation par les projets
+(chaque projet ne voit que ses ressources, on parle de \gls{multitenance}) et par les \glspl{quota}, l'élasticité par la création
+et la suppression de ressources en quelques secondes. La mesure fine de la consommation relève de services de télémétrie que ce
+cours ne traite pas.
 
 % ---------------------------------------------------------------------
 \subsection{Modèles de service et de déploiement}\label{sec:pres-modeles}
 % ---------------------------------------------------------------------
-% IaaS, PaaS, SaaS ; cloud privé, public, hybride
+
+On classe les clouds selon ce que le fournisseur prend en charge. La frontière entre « vous gérez » et « le fournisseur gère »
+distingue trois modèles de service (figure~\ref{fig:pres-modeles}) :
+
+\begin{itemize}
+  \item en \textbf{\gls{iaas}}, le fournisseur met à disposition l'infrastructure (machines virtuelles, réseaux, volumes) ; l'utilisateur
+        installe et administre le système, l'environnement d'exécution, ses données et ses applications ;
+  \item en \textbf{\gls{paas}}, le fournisseur gère aussi le système et l'environnement d'exécution ; l'utilisateur ne déploie que son
+        application et ses données ;
+  \item en \textbf{\gls{saas}}, le fournisseur livre une application complète, que l'utilisateur se contente d'utiliser.
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    cu/.style = {draw=insarouge, fill=insarouge!14, thick, minimum width=4.2cm, minimum height=0.68cm, align=center},
+    cf/.style = {draw=insagris, fill=insagris!14, thick, minimum width=4.2cm, minimum height=0.68cm, align=center}]
+  % en-têtes
+  \node[font=\small\bfseries, text=insarouge] at (2.4,6.6) {IaaS};
+  \node[font=\small\bfseries, text=insarouge] at (7.2,6.6) {PaaS};
+  \node[font=\small\bfseries, text=insarouge] at (12.0,6.6) {SaaS};
+  \node[font=\scriptsize, text=insagris] at (2.4,6.2) {Infrastructure as a Service};
+  \node[font=\scriptsize, text=insagris] at (7.2,6.2) {Platform as a Service};
+  \node[font=\scriptsize, text=insagris] at (12.0,6.2) {Software as a Service};
+  % couches (de haut en bas) : les \nu premières sont gérées par l'utilisateur
+  \foreach \x/\nu in {2.4/3, 7.2/2, 12.0/0}{
+    \foreach \y [count=\k] in {5.5, 4.8, 4.1, 3.4, 2.7, 2.0}{
+      \ifnum\k>\nu
+        \node[cf] at (\x,\y) {};
+      \else
+        \node[cu] at (\x,\y) {};
+      \fi
+    }
+  }
+  % textes des couches (identiques dans les trois colonnes)
+  \foreach \x in {2.4,7.2,12.0}{
+    \node[font=\footnotesize] at (\x,5.5) {Application};
+    \node[font=\footnotesize] at (\x,4.8) {Données};
+    \node[font=\footnotesize] at (\x,4.1) {Système et exécution};
+    \node[font=\footnotesize] at (\x,3.4) {Virtualisation};
+    \node[font=\footnotesize] at (\x,2.7) {Serveurs};
+    \node[font=\footnotesize] at (\x,2.0) {Stockage et réseau};
+  }
+  % OpenStack
+  \node[pfoc, minimum width=4.2cm] at (2.4,1.05) {OpenStack};
+  \draw[fluxr] (2.4,1.4) -- (2.4,1.65);
+  % exemples
+  \node[font=\scriptsize\itshape, text=insagris, align=center] at (7.2,1.05) {on dépose son application};
+  \node[font=\scriptsize\itshape, text=insagris, align=center] at (12.0,1.05) {on utilise le logiciel};
+  % légende
+  \node[cu, minimum width=0.6cm, minimum height=0.35cm] at (4.2,0.2) {};
+  \node[anchor=west, font=\scriptsize] at (4.55,0.2) {géré par l'utilisateur};
+  \node[cf, minimum width=0.6cm, minimum height=0.35cm] at (8.3,0.2) {};
+  \node[anchor=west, font=\scriptsize] at (8.65,0.2) {géré par le fournisseur};
+\end{tikzpicture}}
+\caption{Qui gère quoi ? Plus on va de l'IaaS vers le SaaS, plus le fournisseur prend de couches en charge. OpenStack se situe au
+niveau IaaS : il automatise l'infrastructure (calcul, réseau, stockage).}
+\label{fig:pres-modeles}
+\end{figure}
+
+Le \emph{modèle de déploiement} dit, lui, \emph{qui} exploite le cloud et pour qui (tableau~\ref{tab:pres-deploiement}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.2cm}>{\raggedright\arraybackslash}p{6.9cm}>{\raggedright\arraybackslash}p{6.4cm}@{}}
+\toprule
+\textbf{Modèle} & \textbf{Définition} & \textbf{À peser} \\
+\midrule
+Privé & Infrastructure dédiée à une seule organisation, hébergée en interne ou chez un tiers. & Maîtrise des données et de la
+  configuration ; l'exploitation reste à la charge de l'organisation. \\
+Public & Ressources mutualisées entre clients, facturées à l'usage et exploitées par un fournisseur (AWS, Azure, Google Cloud). &
+  Pas d'investissement initial, grande élasticité ; dépendance au fournisseur. \\
+Hybride & Association des deux : certaines charges restent en privé, d'autres passent au public selon les besoins. & Souplesse ;
+  complexité d'intégration et d'identité. \\
+\bottomrule
+\end{tabular}
+\caption{Les modèles de déploiement d'un cloud (le NIST ajoute le cloud communautaire, partagé par un groupe d'organisations
+\parencite{nist-cloud}).}
+\label{tab:pres-deploiement}
+\end{table}
+
+Construire son propre cloud privé répond à quatre besoins : la \textbf{souveraineté} et la confidentialité des données (secteurs
+régulés, données sensibles) ; des \textbf{coûts maîtrisés} à grande échelle, face à une facturation à l'usage ; une
+\textbf{personnalisation} fine de l'infrastructure et des politiques de sécurité ; l'\textbf{indépendance} vis-à-vis d'un fournisseur
+unique. C'est le problème que résout OpenStack, qui peut aussi servir de base à un cloud public.
 
 % ---------------------------------------------------------------------
 \subsection{Qu'est-ce qu'OpenStack ?}\label{sec:pres-openstack}
 % ---------------------------------------------------------------------
-% plateforme IaaS open source ; OpenStack n'est pas un hyperviseur
+
+\begin{definition}{OpenStack}
+OpenStack est un ensemble de logiciels libres qui, assemblés, forment une plateforme de cloud de type \gls{iaas} : elle automatise la
+mise à disposition de calcul, de réseau et de stockage, que l'on pilote par des API \parencite{openstack-site,install-overview}.
+\end{definition}
+
+Le projet est porté par l'OpenInfra Foundation \parencite{openstack-site}, aujourd'hui rattachée à la Linux Foundation
+\parencite{openinfra-lf}. Il publie deux versions par an, nommées d'après l'année et le rang de la version (2026.1, 2026.2) ; la
+première date de 2010 et la plus récente, la 2026.2, est sortie le 30 septembre 2026 \parencite{openstack-releases}. Cinq
+caractéristiques le décrivent :
+
+\begin{itemize}
+  \item \textbf{distribué} : les composants s'exécutent sur plusieurs nœuds et coopèrent par le réseau ;
+  \item \textbf{fait de services indépendants} : chaque projet (Nova, Neutron\dots) est autonome, avec sa propre base de données ;
+  \item \textbf{une \gls{apirest} partout} : toute action, qu'elle vienne de la ligne de commande, de Horizon ou d'un script, passe par
+        des appels REST standardisés ;
+  \item \textbf{modulaire} : on n'installe que les services utiles, et l'ensemble reste extensible ;
+  \item \textbf{bâti sur Linux et sur des logiciels existants} : il en pilote plus qu'il n'en remplace.
+\end{itemize}
+
+La modularité est réelle : le guide d'installation retient comme déploiement minimal Keystone, Glance, Placement, Nova et Neutron, et
+conseille d'y ajouter Horizon et Cinder \parencite{install-services} ; tout le reste est facultatif.
+
+Le dernier point est la source de la confusion la plus fréquente : \textbf{OpenStack n'est pas un hyperviseur}. Il ne fait tourner
+aucune machine virtuelle lui-même ; Nova demande à l'hyperviseur de chaque serveur (en général KVM/QEMU, par \gls{libvirt}) de les
+créer. OpenStack décide, coordonne et expose une API ; d'autres logiciels exécutent (tableau~\ref{tab:pres-confie}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.1cm}>{\raggedright\arraybackslash}p{5.0cm}>{\raggedright\arraybackslash}p{6.4cm}@{}}
+\toprule
+\textbf{Fonction} & \textbf{Logiciel qui l'assure} & \textbf{Ce qu'OpenStack ajoute} \\
+\midrule
+Exécuter les machines virtuelles & KVM/QEMU, par libvirt & Nova choisit le serveur, prépare disque et réseau, suit
+  l'état de l'instance. \\
+Réseau virtuel & Open vSwitch / OVN & Neutron décrit réseaux, routeurs et règles, et les fait appliquer. \\
+Stockage des volumes & LVM, Ceph, baies de stockage & Cinder offre une API unique et les pilotes de chaque
+  \emph{backend}. \\
+Données de service & MariaDB, RabbitMQ & Chaque service les utilise pour son état et ses échanges internes. \\
+\bottomrule
+\end{tabular}
+\caption{OpenStack orchestre des logiciels existants (voir les chapitres~\ref{chap:nova}, \ref{chap:neutron} et~\ref{chap:cinder}).}
+\label{tab:pres-confie}
+\end{table}
+
+\begin{pointcle}
+KVM exécute une machine virtuelle sur un serveur ; OpenStack en gère des milliers sur des centaines de serveurs, avec leurs réseaux,
+leurs disques et leurs utilisateurs. Les deux sont complémentaires, pas concurrents.
+\end{pointcle}
 
 % ---------------------------------------------------------------------
 \subsection{Architecture générale}\label{sec:pres-architecture}
 % ---------------------------------------------------------------------
-% vue d'ensemble des services, API REST, bus de messages, microservices
+
+OpenStack se compose de projets, chacun fournissant un service. Le cours en traite treize, regroupés en quatre familles
+(tableau~\ref{tab:pres-services}) ; l'ordre des chapitres suit ce regroupement.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.9cm}>{\raggedright\arraybackslash}p{3.3cm}>{\raggedright\arraybackslash}p{7.8cm}r@{}}
+\toprule
+\textbf{Famille} & \textbf{Service} & \textbf{Rôle} & \textbf{Chap.} \\
+\midrule
+Identité & Keystone & Authentifie, délivre les tokens, publie le catalogue des services. & \ref{chap:keystone} \\
+\midrule
+Socle IaaS & Nova (Compute) & Cycle de vie des instances. & \ref{chap:nova} \\
+ & Placement & Inventaire des ressources et choix des hôtes. & \ref{chap:placement} \\
+ & Glance (Image) & Catalogue des images de machines. & \ref{chap:glance} \\
+ & Neutron (Network) & Réseaux virtuels, routeurs, adresses flottantes. & \ref{chap:neutron} \\
+ & Cinder (Block Storage) & Volumes persistants. & \ref{chap:cinder} \\
+ & Swift (Object Storage) & Stockage d'objets répliqué. & \ref{chap:swift} \\
+\midrule
+Exploiter le cloud & Horizon (Dashboard) & Interface web. & \ref{chap:horizon} \\
+ & Octavia (Load Balancer) & Répartiteurs de charge. & \ref{chap:octavia} \\
+ & Heat (Orchestration) & Déploie un ensemble de ressources décrit dans un modèle. & \ref{chap:heat} \\
+\midrule
+Plateformes & Ironic (Bare Metal) & Serveurs physiques fournis comme des instances. & \ref{chap:ironic} \\
+ & Magnum (Container Infra) & Clusters Kubernetes à la demande. & \ref{chap:magnum} \\
+ & Trove (Database) & Bases de données gérées. & \ref{chap:trove} \\
+\bottomrule
+\end{tabular}
+\caption{Les services traités dans ce cours, par famille, et le chapitre qui les détaille.}
+\label{tab:pres-services}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  % clients
+  \node[pcli, minimum width=3.3cm] (cli) at (2.0,8.5) {CLI \texttt{openstack}};
+  \node[pcli, minimum width=3.0cm] (hor) at (6.3,8.5) {Horizon};
+  \node[pcli, minimum width=4.2cm] (sdk) at (10.4,8.5) {SDK et scripts};
+  % API REST
+  \node[bus, minimum width=12.6cm] (api) at (6.3,7.35) {API REST (HTTP/JSON) : une API par service};
+  \foreach \x in {2.0,6.3,10.4} \draw[flux] (\x,8.15) -- (\x,7.65);
+  % Keystone
+  \node[pfoc, minimum width=1.8cm, minimum height=6.0cm, text width=1.4cm, align=center] (ks) at (14.2,4.45)
+    {\textbf{Keystone}\\[3pt]{\scriptsize identité,\\ tokens,\\ catalogue}};
+  \draw[fluxo] (12.6,7.35) -- (13.25,7.35) node[etiqf, midway, above=1pt] {token};
+  % groupe 1 : socle
+  \draw[insagris!70, rounded corners=3pt, fill=insagris!5] (0,4.8) rectangle (12.6,6.8);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insagris] at (0.15,6.72) {Socle IaaS (partie~\ref{part:socle})};
+  \node[psvc, minimum width=2.6cm, minimum height=1.0cm] at (1.5,5.55) {Nova, Placement\\[-1pt]{\scriptsize calcul}};
+  \node[psvc, minimum width=2.0cm, minimum height=1.0cm] at (4.2,5.55) {Neutron\\[-1pt]{\scriptsize réseau}};
+  \node[psvc, minimum width=2.0cm, minimum height=1.0cm] at (6.5,5.55) {Glance\\[-1pt]{\scriptsize images}};
+  \node[psvc, minimum width=2.2cm, minimum height=1.0cm] at (8.8,5.55) {Cinder\\[-1pt]{\scriptsize bloc}};
+  \node[psvc, minimum width=2.0cm, minimum height=1.0cm] at (11.1,5.55) {Swift\\[-1pt]{\scriptsize objet}};
+  \foreach \x in {2.0,6.3,10.4} \draw[flux] (\x,7.05) -- (\x,6.82);
+  % groupe 2 : exploiter
+  \draw[insagris!70, rounded corners=3pt, fill=insagris!5] (0,2.65) rectangle (5.4,4.15);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insagris] at (0.15,4.07) {Exploiter le cloud (partie~\ref{part:exploiter})};
+  \node[psvc, minimum width=2.2cm] at (1.4,3.05) {Octavia};
+  \node[psvc, minimum width=2.2cm] at (3.95,3.05) {Heat};
+  % groupe 3 : plateformes
+  \draw[insagris!70, rounded corners=3pt, fill=insagris!5] (5.8,2.65) rectangle (12.6,4.15);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insagris] at (5.95,4.07) {Services de plateforme (partie~\ref{part:plateformes})};
+  \node[psvc, minimum width=1.9cm] at (7.0,3.05) {Ironic};
+  \node[psvc, minimum width=1.9cm] at (9.3,3.05) {Magnum};
+  \node[psvc, minimum width=1.9cm] at (11.6,3.05) {Trove};
+  % dépendances vers le socle
+  \draw[fluxd] (2.7,4.15) -- (2.7,4.8);
+  \draw[fluxd] (9.3,4.15) -- (9.3,4.8);
+  \node[etiqf] at (6.0,4.47) {s'appuient sur les API du socle};
+  % Keystone <-> services
+  \draw[fluxo, <->] (12.6,5.8) -- (13.25,5.8);
+  \draw[fluxo, <->] (12.6,3.4) -- (13.25,3.4);
+  % infrastructure partagée
+  \draw[insagris!70, rounded corners=3pt, fill=insagris!5] (0,0.95) rectangle (12.6,2.3);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insagris] at (0.15,2.22)
+    {Infrastructure partagée : une base par service, un bus de messages};
+  \node[pgris, minimum width=3.0cm] at (2.3,1.35) {MariaDB};
+  \node[pgris, minimum width=3.0cm] at (6.3,1.35) {RabbitMQ};
+  \node[pgris, minimum width=3.0cm] at (10.3,1.35) {Memcached};
+  \node[bus, minimum width=12.6cm, minimum height=0.6cm] at (6.3,0.3)
+    {Serveurs Linux : KVM/QEMU, Open vSwitch/OVN, LVM, Ceph\dots};
+  \draw[flux] (6.3,0.95) -- (6.3,0.6);
+\end{tikzpicture}}
+\caption{Architecture d'ensemble. Les clients ne parlent qu'aux API REST ; Keystone est consulté par tous les services ; chaque
+service s'appuie sur sa base de données et sur le bus de messages ; Nova, Neutron, Cinder et les autres s'exécutent sur des
+serveurs Linux et en pilotent les logiciels.}
+\label{fig:pres-archi}
+\end{figure}
+
+Le schéma se lit de haut en bas. Les \textbf{clients} (la ligne de commande, Horizon, les scripts) ne sont que des clients des
+mêmes API REST : tout ce qui se fait dans le tableau de bord se fait en ligne de commande, et inversement. \textbf{Keystone} est le
+seul service que tous consultent. Le \textbf{socle} fournit le calcul, le réseau, les images et le stockage ; les services
+d'exploitation et de plateforme s'appuient sur ses API, ce qui explique l'ordre des chapitres. En bas, l'infrastructure
+partagée porte l'état et les échanges internes.
+
+\begin{pointcle}
+Horizon n'est pas le cœur d'OpenStack : c'est une interface web qui appelle exactement les mêmes API REST que la ligne de commande.
+\end{pointcle}
+
+\paragraph{Un service est lui-même un système distribué.} Chaque service suit le même plan (figure~\ref{fig:pres-service}), qui fait
+d'OpenStack un exemple réel d'architecture de microservices : une \textbf{API REST} reçoit les requêtes (HTTP/JSON) ; elle délègue le
+travail à des \textbf{processus internes} (ordonnanceur, conducteur, agents) par un \gls{busmessages} asynchrone, en général
+\gls{rabbitmq} ; l'\textbf{état} du service est enregistré dans sa propre base de données, le plus souvent MariaDB. Les services se
+parlent entre eux par leurs API, jamais par la base de données d'un autre. Les bibliothèques communes (\gls{oslo}) assurent la
+configuration, la messagerie et l'accès aux bases.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \draw[insagris, dashed, thick, rounded corners=4pt] (3.7,-1.4) rectangle (14.7,3.7);
+  \node[anchor=south west, font=\scriptsize\bfseries, text=insagris] at (3.85,-1.35) {Un service OpenStack (exemple : Nova)};
+  \node[pcli, minimum width=1.9cm] (cl) at (1.0,1.6) {Client};
+  \node[pfoc, minimum width=2.3cm, align=center] (ap) at (5.6,1.6) {API REST\\[-1pt]{\scriptsize nova-api}};
+  \node[pgris, minimum width=2.0cm, align=center] (mq) at (9.0,1.6) {Bus de\\[-1pt]messages};
+  \node[psvc, minimum width=2.5cm, align=center] (wk) at (12.6,1.6) {Processus internes\\[-1pt]{\scriptsize ordonnanceur, agents}};
+  \node[pdat, minimum width=3.4cm, align=center] (db) at (9.0,-0.5) {Base de données du service};
+  \node[psvc, minimum width=2.6cm, align=center] (ks) at (5.6,4.7) {Keystone};
+  \node[psvc, minimum width=3.4cm, align=center] (ot) at (12.6,4.7) {API d'un autre service\\[-1pt]{\scriptsize (Glance, Neutron\dots)}};
+  \draw[fluxr] (cl) -- (ap);
+  \node[etiqf, above=3pt] at (2.95,1.6) {requête\\ + token};
+  \draw[fluxo, <->] (ap.north) -- (ks.south);
+  \node[etiqf, right=3pt] at (5.6,3.1) {valide le token};
+  \draw[fluxd] (ap) -- (mq);
+  \draw[fluxd] (mq) -- (wk);
+  \draw[flux] (ap.south) |- (db.west);
+  \draw[flux] (wk.south) |- (db.east);
+  \draw[fluxo] (wk.north) -- (ot.south);
+  \node[etiqf, right=3pt] at (12.6,3.1) {appel REST};
+  \node[num] at (2.1,1.6) {1};
+  \node[num] at (5.6,2.55) {2};
+  \node[num] at (7.4,1.6) {3};
+  \node[num] at (6.5,-0.5) {4};
+  \node[num] at (12.6,2.55) {5};
+\end{tikzpicture}}
+\caption{Anatomie d'un service. (1) Le client envoie sa requête et son token à l'API ; (2) l'API fait valider le token par Keystone ;
+(3) elle confie le travail aux processus internes par le bus de messages (flèches pointillées : appels asynchrones) ; (4) l'état est
+conservé dans la base propre du service ; (5) pour agir sur une autre ressource, le service appelle l'API de l'autre service.}
+\label{fig:pres-service}
+\end{figure}
 
 % ---------------------------------------------------------------------
 \subsection{Architecture multi-nœuds}\label{sec:pres-multinoeuds}
 % ---------------------------------------------------------------------
-% rôles des nœuds, séparation du trafic réseau
+
+Pour apprendre ou tester, on installe tout sur une seule machine (\gls{devstack}, déploiement \gls{aio}). En production, les rôles sont
+répartis sur des machines distinctes : c'est l'architecture \emph{multi-nœuds}. Le guide d'installation en donne un exemple à quatre
+types de nœuds, contrôleur, calcul, et en option stockage bloc et stockage objet \parencite{install-overview} ; le support de ce
+cours y ajoute un nœud réseau dédié, qui porte les routeurs et la sortie vers l'extérieur (figure~\ref{fig:pres-multi}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    noeud/.style = {draw=insarouge, fill=insarouge!6, thick, rounded corners=3pt, minimum width=2.7cm, minimum height=2.8cm,
+                    text width=2.5cm, align=center, font=\scriptsize}]
+  % réseau de gestion, en haut
+  \draw[insarouge, line width=2pt] (0,6.5) -- (14.9,6.5);
+  \node[anchor=south west, font=\scriptsize\bfseries, text=insarouge] at (0,6.55) {Gestion \texttt{10.0.0.0/24} (eth0)};
+  % les cinq nœuds (haut à 5,7 ; bas à 2,9)
+  \node[noeud] at (1.5,4.3) {\textbf{\footnotesize Contrôleur}\\ \texttt{10.0.0.11}\\[2pt] Keystone, Glance, Placement, API de Nova et de
+      Neutron, Horizon, MariaDB, RabbitMQ};
+  \node[noeud] at (4.5,4.3) {\textbf{\footnotesize Réseau}\\ \texttt{10.0.0.21}\\[2pt] Neutron (OVN) :\\ routeurs, DHCP,\\ adresses flottantes};
+  \node[noeud] at (7.5,4.3) {\textbf{\footnotesize Calcul}\\ \texttt{10.0.0.31}\\[2pt] nova-compute,\\ hyperviseur KVM,\\ agent réseau, instances};
+  \node[noeud] at (10.5,4.3) {\textbf{\footnotesize Stockage bloc}\\ \texttt{10.0.0.41}\\[2pt] Cinder :\\ volumes attachés\\ aux instances};
+  \node[noeud] at (13.5,4.3) {\textbf{\footnotesize Stockage objet $\times$\,2}\\ \texttt{10.0.0.51}, \texttt{.52}\\[2pt] Swift :\\ objets répliqués};
+  % raccordement à la gestion
+  \foreach \x in {1.5,4.5,7.5,10.5,13.5}{
+    \draw[insarouge, thick] (\x,5.7) -- (\x,6.5);
+    \fill[insarouge] (\x,6.5) circle (2.2pt);
+  }
+  % réseau des instances (tunnels) : nœuds réseau et calcul
+  \draw[insaorange, line width=2pt] (4.9,2.35) -- (7.9,2.35);
+  \foreach \x in {4.9,7.9}{
+    \draw[insaorange, thick] (\x,2.9) -- (\x,2.35);
+    \fill[insaorange] (\x,2.35) circle (2.2pt);
+  }
+  \node[anchor=north, font=\scriptsize\bfseries, text=insaorange] at (6.4,2.27) {Instances (eth1) \texttt{10.0.1.0/24}};
+  % réseau de stockage : calcul, stockage bloc et objet
+  \draw[insagris, line width=2pt] (8.5,1.8) -- (13.9,1.8);
+  \foreach \x in {8.5,10.5,13.9}{
+    \draw[insagris, thick] (\x,2.9) -- (\x,1.8);
+    \fill[insagris] (\x,1.8) circle (2.2pt);
+  }
+  \node[anchor=north, font=\scriptsize\bfseries, text=insagris] at (11.2,1.72) {Stockage (eth2) \texttt{10.0.2.0/24}};
+  % réseau externe : nœud réseau seul
+  \draw[black, line width=2pt, dashed] (1.5,0.9) -- (4.1,0.9);
+  \draw[black, thick] (4.1,2.9) -- (4.1,0.9);
+  \fill[black] (4.1,0.9) circle (2.2pt);
+  \node[pcli, minimum width=2.4cm] at (1.5,0.9) {Internet};
+  \node[anchor=west, font=\scriptsize\bfseries] at (4.3,0.9) {Externe (eth3), sans adresse de gestion};
+\end{tikzpicture}}
+\caption{Architecture multi-nœuds et ses quatre réseaux (adresses du support de cours). Tous les nœuds sont sur le réseau de
+gestion ; seuls les nœuds réseau et de calcul portent les tunnels des instances ; le stockage ne concerne que le calcul et les nœuds
+de stockage ; seul le nœud réseau est relié à l'extérieur.}
+\label{fig:pres-multi}
+\end{figure}
+
+Chaque nœud possède plusieurs interfaces, chacune dédiée à un type de trafic (tableau~\ref{tab:pres-reseaux}). Séparer les flux apporte trois
+choses : la \textbf{sécurité} (le trafic d'administration n'est pas exposé aux instances ni à l'extérieur), la \textbf{performance}
+(le trafic massif du stockage ne sature pas le réseau de gestion) et le \textbf{diagnostic} (une panne réseau se localise plus vite
+quand chaque flux a son canal). Même avec une seule machine, ces quatre réseaux logiques existent : ils partagent alors la même
+carte physique.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.9cm}>{\raggedright\arraybackslash}p{2.9cm}>{\raggedright\arraybackslash}p{9.7cm}@{}}
+\toprule
+\textbf{Réseau} & \textbf{Sous-réseau} & \textbf{Trafic transporté} \\
+\midrule
+Gestion (eth0) & \texttt{10.0.0.0/24} & Appels d'API entre les services (Keystone, Nova, Cinder\dots), commandes de la ligne de commande et
+  d'Horizon, bus de messages. \\
+Instances (eth1) & \texttt{10.0.1.0/24} & Trafic des machines virtuelles entre elles, encapsulé dans des tunnels (Geneve ou VXLAN, voir
+  \gls{overlay}) entre les nœuds réseau et de calcul. \\
+Stockage (eth2) & \texttt{10.0.2.0/24} & Accès des nœuds de calcul aux volumes de Cinder ; échanges des nœuds de stockage objet. \\
+Externe (eth3) & adresses publiques & Accès aux instances par leurs adresses flottantes ; porté par le seul nœud réseau, sans adresse de
+  gestion. \\
+\bottomrule
+\end{tabular}
+\caption{Les quatre réseaux d'un déploiement multi-nœuds. Les noms d'interface et les adresses sont ceux du support ; ils changent
+d'un site à l'autre.}
+\label{tab:pres-reseaux}
+\end{table}
+
+En production, le contrôleur lui-même est triplé pour tolérer une panne (chapitre~\ref{chap:deploiement}), et le guide d'installation
+recommande de séparer le trafic de stockage de celui de gestion \parencite{install-overview}.
 
 % ---------------------------------------------------------------------
 \subsection{Que se passe-t-il quand on crée une VM ?}\label{sec:pres-scenario}
 % ---------------------------------------------------------------------
-% scénario complet, de la commande CLI aux services sollicités
+
+La commande suivante crée une machine virtuelle. Elle tient en quatre lignes, mais elle met en jeu presque tous les services du
+socle.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack server create \
+    --flavor m1.small \
+    --image ubuntu \
+    --network private \
+    vm1
+\end{lstlisting}
+\end{minipage}\par
+
+Chaque option désigne une ressource que gère un autre service : le gabarit (\gls{flavor}, qui fixe les vCPU, la mémoire et le disque)
+est connu de Nova, l'\gls{image} de Glance, le réseau de Neutron. La figure~\ref{fig:pres-scenario} suit la requête.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.2cm] (cli) at (1.3,4.7) {Client\\[-1pt]{\scriptsize \texttt{openstack}}};
+  \node[psvc, minimum width=2.3cm] (ks) at (3.5,6.6) {Keystone};
+  \node[pfoc, minimum width=2.3cm] (api) at (5.7,4.7) {API de Nova};
+  \node[psvc, minimum width=2.4cm] (sch) at (9.3,4.7) {Ordonnanceur};
+  \node[psvc, minimum width=2.0cm] (plc) at (13.6,4.7) {Placement};
+  \node[pfoc, minimum width=3.0cm] (cmp) at (9.3,2.55) {Nœud de calcul\\[-1pt]{\scriptsize nova-compute}};
+  \node[pgris, minimum width=2.4cm] (kvm) at (13.6,2.55) {KVM / QEMU};
+  \node[psvc, minimum width=1.9cm] (gl) at (5.0,0.5) {Glance};
+  \node[psvc, minimum width=1.9cm] (ne) at (8.0,0.5) {Neutron};
+  \node[psvc, minimum width=2.2cm] (ci) at (11.0,0.5) {Cinder\\[-1pt]{\scriptsize si volume}};
+  \node[pdat, minimum width=1.9cm] (ins) at (14.2,0.5) {Instance};
+  % chemin de contrôle
+  \draw[fluxo] (cli.north) -- (ks.west) node[num, midway] {1};
+  \draw[fluxr] (cli) -- (api) node[num, midway] {2};
+  \draw[fluxo, <->] (api.north) -- (ks.east) node[num, midway] {3};
+  \draw[fluxd] (api) -- (sch) node[num, midway] {4};
+  \draw[fluxo, <->] (sch) -- (plc) node[num, midway] {5};
+  \draw[fluxd] (sch) -- (cmp) node[num, midway] {6};
+  % ressources
+  \draw[fluxo] (cmp.south) -- (gl.north) node[num, near end] {7};
+  \draw[fluxo] (cmp.south) -- (ne.north) node[num, near end] {7};
+  \draw[fluxo] (cmp.south) -- (ci.north) node[num, near end] {7};
+  \node[etiqf, left=3pt] at (6.9,1.55) {image};
+  \node[etiqf, left=2pt] at (8.6,1.5) {port};
+  \node[etiqf, right=3pt] at (10.0,1.55) {volume};
+  % démarrage
+  \draw[fluxr] (cmp) -- (kvm) node[num, midway] {8};
+  \draw[fluxr] (kvm.south) -- (ins.north) node[num, midway] {9};
+\end{tikzpicture}}
+\caption{Création d'une machine virtuelle. Flèches orange : appels d'API entre services ; flèches rouges : chemin de la requête ;
+pointillés : échanges asynchrones par le bus de messages. Le détail de la séquence côté Nova est donné au
+chapitre~\ref{chap:nova} (figure~\ref{fig:nova-seq}).}
+\label{fig:pres-scenario}
+\end{figure}
+
+\begin{enumerate}[label=\textcolor{insarouge}{\bfseries\arabic*.}, nosep, leftmargin=*]
+  \item Le client s'authentifie auprès de \textbf{Keystone} et reçoit un token ; le catalogue lui indique l'adresse de l'API de Nova
+        (chapitre~\ref{chap:keystone}).
+  \item Il envoie la requête \texttt{POST /servers} à l'API de \textbf{Nova}, avec le token en en-tête.
+  \item Nova fait valider le token et les rôles par Keystone, et applique sa politique d'accès.
+  \item Nova enregistre l'instance et transmet la demande à l'\gls{ordonnanceur}. L'API répond aussitôt : la machine est en cours de
+        construction (état \texttt{BUILD}), le travail continue en arrière-plan.
+  \item L'ordonnanceur demande à \textbf{Placement} quels hôtes ont assez de processeurs, de mémoire et de disque, en choisit un parmi les
+        candidats, puis Placement enregistre la réservation.
+  \item La demande part, par le bus de messages, au \gls{noeudcalcul} retenu.
+  \item Le service \texttt{nova-compute} de ce nœud réunit les ressources, en parallèle : l'image est fournie par \textbf{Glance}, le port
+        réseau est créé par \textbf{Neutron}, et le volume, s'il en faut un, par \textbf{Cinder}.
+  \item Il demande ensuite à l'hyperviseur, par \gls{libvirt}, de démarrer la machine sous KVM/QEMU.
+  \item L'instance passe à l'état \texttt{ACTIVE} ; \texttt{openstack server show vm1} l'affiche avec l'adresse privée attribuée par Neutron.
+\end{enumerate}
+
+\begin{pointcle}
+Chaque service ne fait qu'un métier : Keystone authentifie, Nova orchestre, Placement choisit l'hôte, l'hyperviseur exécute, Glance,
+Neutron et Cinder fournissent l'image, le réseau et le disque.
+\end{pointcle}
+
+\paragraph{Mini-TP en ligne de commande.} Le tableau~\ref{tab:pres-tp} déroule le scénario sur un cloud réel ou sur DevStack. Pour
+chaque commande, on retient le service qui la traite en coulisses. Une instance n'est joignable de l'extérieur que si son groupe de
+sécurité laisse passer le trafic (par défaut, tout le trafic entrant est refusé) et si une adresse flottante lui est associée
+(chapitre~\ref{chap:neutron}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{@{}r>{\raggedright\arraybackslash}p{4.1cm}>{\raggedright\arraybackslash}p{7.0cm}>{\raggedright\arraybackslash}p{2.7cm}@{}}
+\toprule
+\textbf{\#} & \textbf{Étape} & \textbf{Commande} & \textbf{Service} \\
+\midrule
+1 & Vérifier son identité & \texttt{openstack token issue} & Keystone \\
+2 & Voir les images & \texttt{openstack image list} & Glance \\
+3 & Voir les gabarits & \texttt{openstack flavor list} & Nova \\
+4 & Voir les réseaux & \texttt{openstack network list} & Neutron \\
+5 & Créer la machine & \texttt{openstack server create\dots} & Nova \\
+6 & Vérifier la machine & \texttt{openstack server show vm1} & Nova \\
+7 & Obtenir son adresse & \texttt{openstack server list} & Nova \\
+8 & Ouvrir SSH & \texttt{openstack security group rule create --protocol tcp --dst-port 22 default} & Neutron \\
+9 & Créer et associer une adresse flottante & \texttt{openstack floating ip create public} puis
+  \texttt{openstack server add floating ip vm1 <IP>} & Neutron \\
+\bottomrule
+\end{tabular}
+\caption{Mini-TP : chaque commande et le service qui la traite.}
+\label{tab:pres-tp}
+\end{table}
 
 % ---------------------------------------------------------------------
 \subsection{OpenStack et les technologies voisines}\label{sec:pres-comparaison}
 % ---------------------------------------------------------------------
-% KVM, Proxmox, VMware vSphere, Kubernetes
+
+Les outils que l'on rapproche d'OpenStack ne jouent pas tous le même rôle, et ne sont donc pas tous concurrents
+(tableau~\ref{tab:pres-compar}). KVM est un hyperviseur : il exécute des machines virtuelles sur le noyau Linux
+\parencite{kvm}. Proxmox VE est une plateforme de virtualisation qui réunit KVM, les conteneurs LXC, le stockage et le réseau
+dans une seule interface de gestion \parencite{proxmox}. VMware vSphere est une plateforme de virtualisation commerciale. Kubernetes n'a rien d'une plateforme de machines virtuelles : c'est un orchestrateur de conteneurs, qui gère des
+charges de travail conteneurisées \parencite{kubernetes-overview}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{9.5cm}@{}}
+\toprule
+\textbf{Technologie} & \textbf{Catégorie} & \textbf{Rapport avec OpenStack} \\
+\midrule
+KVM & Hyperviseur & Exécute les machines que Nova demande ; OpenStack le pilote, il ne le remplace pas. \\
+VMware vSphere & Virtualisation propriétaire & Alternative commerciale pour un cloud privé de machines virtuelles. \\
+Proxmox VE & Plateforme de virtualisation & Gère un ou quelques serveurs avec une interface unique ; OpenStack vise le datacenter entier et
+  le libre-service multi-projets. \\
+OpenStack & Cloud IaaS & Automatise calcul, réseau et stockage sur des dizaines de nœuds, derrière des API. \\
+Kubernetes & Orchestration de conteneurs & Se place au-dessus : il peut tourner sur des machines fournies par OpenStack (Magnum, chapitre~\ref{chap:magnum}). \\
+\bottomrule
+\end{tabular}
+\caption{Technologies voisines d'OpenStack : catégorie et rapport. Les comparer n'a de sens qu'à l'échelle où leurs périmètres se
+recoupent.}
+\label{tab:pres-compar}
+\end{table}
+
+La relation avec Kubernetes mérite qu'on s'y arrête (figure~\ref{fig:pres-pile}) : les deux opèrent à des niveaux différents. OpenStack
+fournit des machines, un réseau et des volumes ; Kubernetes les utilise pour y placer des conteneurs. Une pratique courante consiste à
+déployer des clusters Kubernetes sur des machines virtuelles créées par OpenStack, le réseau et le stockage restant gérés par Neutron et
+Cinder.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    couche/.style = {draw=insagris, fill=insagris!10, thick, minimum width=5.4cm, minimum height=0.8cm, align=center}]
+  \node[couche, draw=insarouge, fill=insarouge!10] (app) at (3.0,5.2) {Applications (conteneurs)};
+  \node[couche, draw=insarouge, fill=insarouge!22] (k8s) at (3.0,4.2) {Kubernetes : pods, services, déploiements};
+  \node[couche, draw=insaorange, fill=insapeche] (vm) at (3.0,3.2) {Machines virtuelles, réseau, volumes};
+  \node[couche, draw=insaorange, fill=insapeche, line width=1.4pt] (os) at (3.0,2.2) {OpenStack : Nova, Neutron, Cinder};
+  \node[couche] (hv) at (3.0,1.2) {Hyperviseurs KVM sur serveurs Linux};
+  \node[couche] (hw) at (3.0,0.2) {Matériel : serveurs, réseau, disques};
+  % accolades à droite
+  \draw[decorate, decoration={brace, amplitude=5pt, mirror}, thick, insarouge] (5.9,3.75) -- (5.9,5.6);
+  \node[anchor=west, text width=5.6cm, font=\footnotesize] at (6.3,4.7)
+    {\textbf{Orchestration de conteneurs} : on décrit l'application, Kubernetes place et relance les conteneurs.};
+  \draw[decorate, decoration={brace, amplitude=5pt, mirror}, thick, insaorange] (5.9,1.7) -- (5.9,3.6);
+  \node[anchor=west, text width=5.6cm, font=\footnotesize] at (6.3,2.6)
+    {\textbf{Cloud IaaS} : on demande des machines, un réseau et des volumes à une API.};
+  \draw[decorate, decoration={brace, amplitude=5pt, mirror}, thick, insagris] (5.9,-0.2) -- (5.9,1.6);
+  \node[anchor=west, text width=5.6cm, font=\footnotesize] at (6.3,0.7)
+    {\textbf{Infrastructure} : serveurs et hyperviseurs que le cloud automatise.};
+\end{tikzpicture}}
+\caption{Kubernetes au-dessus d'OpenStack. Les nœuds du cluster sont des machines virtuelles du cloud, avec leur réseau et leurs
+volumes.}
+\label{fig:pres-pile}
+\end{figure}
+
+Le choix d'un outil dépend donc de l'échelle et du besoin : quelques serveurs à administrer d'un seul endroit relèvent plutôt d'une
+plateforme comme Proxmox VE ; un cloud privé en libre-service pour de nombreuses équipes, avec des API, des réseaux virtuels par projet
+et des milliers de machines, relève d'OpenStack ; le déploiement d'applications en conteneurs relève de Kubernetes, qui peut très bien
+reposer sur l'un ou l'autre.
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:pres-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Concevoir une application web}\label{ex:pres-web}
+Une application web tourne sur deux serveurs identiques, derrière un point d'entrée unique, et doit être accessible depuis Internet.
+Ses données doivent survivre à la perte d'un serveur. Quels services OpenStack faut-il, et quelles ressources faut-il créer, dans quel
+ordre ?
+\end{exercice}
+\begin{correction}
+\textbf{Services.} Keystone (identité de tous les appels), Glance (image du serveur web), Nova (les deux instances), Neutron (réseau
+privé, routeur, groupe de sécurité, adresse flottante), Cinder (volume persistant pour les données), Octavia (point d'entrée unique
+et répartition de charge) ; Horizon est facultatif.
+
+\textbf{Ordre.} (1) Réseau privé, sous-réseau et routeur vers le réseau externe. (2) Groupe de sécurité qui ouvre les ports 80 et 22.
+(3) Les deux instances, depuis l'image, sur le réseau privé. (4) Le volume, attaché à l'instance qui porte les données (ou, mieux,
+une base de données séparée). (5) Le répartiteur Octavia : un \emph{listener} sur le port 80, un \emph{pool} avec les deux instances
+comme membres, un \emph{health monitor} qui retire un membre défaillant. (6) Une adresse flottante associée à l'adresse virtuelle du
+répartiteur. Seule cette adresse est publique ; les instances restent sur le réseau privé.
+\end{correction}
+
+\begin{exercice}{Où est le problème ?}\label{ex:pres-symptomes}
+Pour chaque symptôme, dire quel service est probablement en cause et ce qu'on vérifie en premier.
+(a) \texttt{openstack token issue} répond « The request you have made requires authentication » (HTTP 401).
+(b) \texttt{openstack server create} est accepté, mais l'instance passe en \texttt{ERROR} avec « No valid host was found ».
+(c) L'instance est \texttt{ACTIVE}, mais on ne peut pas s'y connecter en SSH depuis l'extérieur.
+\end{exercice}
+\begin{correction}
+(a) \textbf{Keystone} : les identifiants (utilisateur, mot de passe, domaine, projet) donnés à la ligne de commande sont faux ou
+incomplets ; on relit les variables \texttt{OS\_*} ou le fichier \texttt{clouds.yaml}.
+(b) \textbf{L'ordonnanceur et Placement} : aucun nœud de calcul ne répond aux exigences du gabarit ; on compare le gabarit demandé aux
+ressources libres (\texttt{openstack hypervisor list}, \texttt{openstack resource provider list}) et à l'état des services
+\texttt{nova-compute}.
+(c) \textbf{Neutron} : la chaîne réseau est incomplète ; on vérifie, dans l'ordre, le groupe de sécurité (port 22 ouvert), l'adresse
+flottante (créée et associée), et le routeur entre le réseau privé et le réseau externe.
+\end{correction}
+
+\begin{exercice}{Placer les services sur les nœuds}\label{ex:pres-noeuds}
+D'après la figure~\ref{fig:pres-multi}, sur quel nœud s'exécute chaque composant, et à quels réseaux ce nœud est-il relié ?
+(a) \texttt{nova-compute} ; (b) l'API de Keystone ; (c) \texttt{cinder-volume} ; (d) un routeur virtuel et l'adresse flottante ;
+(e) MariaDB.
+\end{exercice}
+\begin{correction}
+(a) \texttt{nova-compute} s'exécute sur le \textbf{nœud de calcul} : gestion, instances (tunnels) et stockage, car il atteint les
+volumes de Cinder. (b) L'API de Keystone et (e) MariaDB sont sur le \textbf{contrôleur}, qui n'a besoin que du réseau de gestion.
+(c) \texttt{cinder-volume} est sur le \textbf{nœud de stockage bloc} : gestion et stockage. (d) Le routeur virtuel et l'adresse
+flottante sont portés par le \textbf{nœud réseau} : gestion, instances et externe, et lui seul est relié à l'extérieur.
+Dans cette topologie, perdre le réseau de stockage d'un nœud de calcul coupe l'accès de ses instances à leurs volumes, mais pas l'administration du cloud,
+qui passe par le réseau de gestion.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:pres-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Un cloud met à disposition des ressources à la demande, par le réseau, de façon mutualisée et élastique. OpenStack est un cloud
+        \textbf{IaaS} open source, surtout employé pour bâtir des clouds privés.
+  \item OpenStack \textbf{n'est pas un hyperviseur} : il orchestre calcul, réseau et stockage, et pilote KVM/QEMU, Open vSwitch ou OVN,
+        LVM ou Ceph.
+  \item Il est fait de \textbf{services indépendants} qui communiquent par des \textbf{API REST} ; chacun a sa base de données et se
+        compose d'une API et de processus reliés par un bus de messages.
+  \item \textbf{Keystone} est consulté à chaque appel ; Horizon et la ligne de commande ne sont que des clients des mêmes API.
+  \item En production, on répartit les rôles (contrôleur, réseau, calcul, stockage) et on \textbf{sépare les réseaux} : gestion,
+        instances, stockage, externe.
+  \item OpenStack et Kubernetes opèrent à des niveaux différents : Kubernetes peut tourner sur des machines que fournit OpenStack.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{9.4cm}r@{}}
+\toprule
+\textbf{Question} & \textbf{Où chercher} & \textbf{§} \\
+\midrule
+Qui fait quoi ? & Tableau~\ref{tab:pres-services} : service, rôle, chapitre. & \ref{sec:pres-architecture} \\
+Comment communiquent les services ? & Figure~\ref{fig:pres-service} : API REST, bus de messages, base de données. &
+  \ref{sec:pres-architecture} \\
+Où placer chaque rôle ? & Figure~\ref{fig:pres-multi} et tableau~\ref{tab:pres-reseaux}. & \ref{sec:pres-multinoeuds} \\
+Que fait \texttt{server create} ? & Figure~\ref{fig:pres-scenario} et neuf étapes. & \ref{sec:pres-scenario} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Expliquer à quelle couche (IaaS, PaaS, SaaS) se situe OpenStack et pourquoi il n'est pas un hyperviseur.
+  \item Relier chaque commande \texttt{openstack} au service qui la traite et décrire le parcours d'une requête de création de machine
+        (exercice~\ref{ex:pres-symptomes}).
+  \item Concevoir une application simple avec les services du socle (exercice~\ref{ex:pres-web}) et placer les rôles sur les nœuds d'un
+        déploiement (exercice~\ref{ex:pres-noeuds}).
+\end{itemize}
+\end{savoirfaire}
+
