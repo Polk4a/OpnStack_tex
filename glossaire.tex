@@ -169,3 +169,62 @@
 
 \newglossaryentry{claim}{name={réservation (claim)}, sort={reservation}, text={réservation},
   description={Création d'une allocation dans Placement pour une instance, faite par l'ordonnanceur une fois l'hôte choisi ; si elle échoue, c'est qu'un autre consommateur a pris les ressources entre-temps}}
+
+% ---- Glance ----------------------------------------------------------
+\newglossaryentry{image}{name={image}, sort={image},
+  description={Fichier disque d'une machine virtuelle (système installé) qu'on duplique pour créer des instances ; Glance en conserve les données et les métadonnées}}
+
+\newglossaryentry{qcow2}{name={qcow2}, sort={qcow2},
+  description={Format de disque de QEMU à copie sur écriture : le fichier ne grossit qu'avec les données écrites et peut s'appuyer sur un fichier de base}}
+
+\newglossaryentry{store}{name={store (backend de stockage)}, sort={store}, text={store},
+  description={Système où Glance garde les données des images : système de fichiers, Ceph (rbd), Swift, Cinder, VMware ; en lecture seule pour http}}
+
+% ---- Neutron ---------------------------------------------------------
+\newglossaryentry{reseau}{name={réseau (network)}, sort={reseau}, text={réseau}, plural={réseaux},
+  description={Dans Neutron, domaine de diffusion de niveau 2 isolé, auquel on rattache des ports}}
+
+\newglossaryentry{sousreseau}{name={sous-réseau (subnet)}, sort={sous-reseau}, text={sous-réseau}, plural={sous-réseaux},
+  description={Plage d'adresses IP associée à un réseau Neutron, avec sa passerelle et son serveur DHCP éventuel}}
+
+\newglossaryentry{port}{name={port}, sort={port},
+  description={Point de connexion d'un équipement (en général la carte réseau d'une instance) à un réseau Neutron ; il porte une adresse MAC, des adresses IP et des groupes de sécurité}}
+
+\newglossaryentry{routeur}{name={routeur (router)}, sort={routeur}, text={routeur},
+  description={Objet Neutron qui relie des réseaux entre eux et vers l'extérieur, avec traduction d'adresses (NAT)}}
+
+\newglossaryentry{groupesecurite}{name={groupe de sécurité}, sort={groupe de securite}, text={groupe de sécurité}, plural={groupes de sécurité},
+  description={Ensemble de règles de pare-feu appliqué aux ports : par défaut tout le trafic entrant est refusé et tout le trafic sortant autorisé ; les règles sont avec état}}
+
+\newglossaryentry{ipflottante}{name={IP flottante (floating IP)}, sort={IP flottante}, text={IP flottante},
+  description={Adresse publique associée à la demande à un port d'instance, et traduite en son adresse privée par le routeur}}
+
+\newglossaryentry{provider}{name={réseau provider}, sort={reseau provider}, text={réseau provider},
+  description={Réseau créé par l'administrateur et rattaché directement à un réseau physique existant (flat ou VLAN)}}
+
+\newglossaryentry{selfservice}{name={réseau self-service}, sort={reseau self-service}, text={réseau self-service},
+  description={Réseau virtuel (overlay) créé par un projet sans droits d'administrateur ; il a besoin d'un routeur pour sortir}}
+
+\newglossaryentry{overlay}{name={overlay (réseau superposé)}, sort={overlay}, text={overlay},
+  description={Réseau virtuel dont les trames sont encapsulées (VXLAN, Geneve) dans des paquets IP du réseau physique}}
+
+\newglossaryentry{vlan}{name={VLAN}, sort={VLAN},
+  description={Réseau local virtuel 802.1Q identifié par un numéro de 1 à 4094 ; la limite de 4094 réseaux restreint son usage pour les projets}}
+
+\newglossaryentry{vxlan}{name={VXLAN, Geneve}, sort={VXLAN}, text={VXLAN},
+  description={Protocoles de tunnel qui encapsulent des trames Ethernet dans des paquets UDP/IP ; ils servent aux réseaux overlay et n'ont pas la limite des VLAN}}
+
+\newglossaryentry{ml2}{name={ML2 (Modular Layer 2)}, sort={ML2}, text={ML2},
+  description={Plugin de base de Neutron : il orchestre des \emph{type drivers} (flat, VLAN, VXLAN\dots) et des \emph{mechanism drivers} (Open vSwitch, OVN\dots)}}
+
+\newglossaryentry{ovs}{name={Open vSwitch (OVS)}, sort={Open vSwitch}, text={Open vSwitch},
+  description={Commutateur virtuel programmable : il relie sur chaque nœud les interfaces des instances, les tunnels et les interfaces physiques, selon des règles (\emph{flows}) OpenFlow}}
+
+\newglossaryentry{ovn}{name={OVN (Open Virtual Network)}, sort={OVN}, text={OVN},
+  description={Système de réseau virtuel bâti sur Open vSwitch, avec deux bases de données et un démon par nœud ; il distribue le routage, le DHCP et les règles de sécurité}}
+
+\newglossaryentry{agentneutron}{name={agent Neutron}, sort={agent Neutron}, text={agent},
+  description={Processus qui, sur un nœud, traduit les objets Neutron en configuration réelle : agent L2 (Open vSwitch), L3 (routeurs), DHCP, métadonnées}}
+
+\newglossaryentry{nat}{name={NAT}, sort={NAT},
+  description={Traduction d'adresses réseau : le routeur remplace l'adresse source ou destination d'un paquet (SNAT pour la sortie, DNAT pour l'entrée)}}

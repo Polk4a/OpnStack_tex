@@ -2,10 +2,541 @@
 %  Chapitre « Neutron : le service réseau »
 %  Fichier importé par main.tex avec \include{chap_neutron}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : supports « Introduction à OpenStack » (partie 7) et « Chapitre 2 :
+%  Réseaux avancés », documentation officielle de Neutron (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Neutron : le service réseau}\label{chap:neutron}
+% =====================================================================
+
+Neutron fournit le réseau des instances : réseaux, adresses, routeurs, pare-feu et adresses publiques. Ce chapitre présente
+d'abord les objets que voit l'utilisateur, puis la façon dont Neutron les réalise : types de réseaux, architecture en
+plugin ML2 et agents, et pilote OVN. Il suit ensuite la création d'un port pour une instance, détaille les groupes de
+sécurité et les IP flottantes, puis la mise en œuvre.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Neutron}\label{sec:neu-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Neutron}
+Neutron est le service de réseau d'OpenStack (projet \emph{Networking}). Il expose une API pour définir des
+\glspl{reseau}, des \glspl{sousreseau}, des \glspl{port}, des \glspl{routeur} et des \glspl{groupesecurite}, et laisse des
+pilotes (plugins) les réaliser sur l'infrastructure \parencite{neutron-intro}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Relier les machines virtuelles entre elles et au monde extérieur, de façon isolée entre
+        projets, sans que l'utilisateur configure le matériel.
+  \item \textbf{Communique avec.} Keystone (authentification), Nova (qui lui demande un port pour chaque carte réseau
+        d'instance et est prévenu quand il est prêt), Octavia (réseaux des répartiteurs de charge), et le commutateur
+        virtuel de chaque nœud (Open vSwitch ou OVN).
+  \item \textbf{Exemple.} \texttt{openstack network create private-net} crée un réseau isolé ; Neutron l'implémente
+        sans aucune action sur le réseau physique.
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,6.6) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.8cm, minimum height=1.3cm] (ne) at (6.4,3.7)
+    {Neutron\\ {\scriptsize\mdseries réseaux, ports, routeurs}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,3.7) {Keystone};
+  \node[psvc, minimum width=2.6cm] (no) at (11.9,5.2) {Nova};
+  \node[psvc, minimum width=2.6cm] (oc) at (11.9,2.2) {Octavia};
+  \node[pgris, minimum width=11.0cm] (bk) at (6.4,0.3)
+    {Open vSwitch ou OVN sur chaque nœud, et réseau physique};
+  \draw[fluxr] (cli) -- (ne)
+    node[num, pos=0.3] {1} node[etiqf, midway, left=4mm, text width=2.6cm, align=right] {\texttt{POST /v2.0/networks}};
+  \draw[fluxo] (ne.west) -- (ks.east)
+    node[num, pos=0.15, above=3pt] {2} node[etiqf, midway, below=2pt] {valide le token};
+  \draw[fluxo, <->] (no.west) -- (ne.north east)
+    node[num, pos=0.15, above=3pt] {3} node[etiqf, pos=0.66, above=2pt, align=center] {ports,\\ événements};
+  \draw[fluxo] (oc.west) -- (ne.south east) node[etiqf, near end, below=2pt] {réseaux};
+  \draw[fluxr] (ne.south) -- (bk.north)
+    node[num, pos=0.45] {4} node[etiqf, midway, right=5mm] {configure};
+  \node[callout, minimum width=13.4cm] at (6.4,-0.9)
+    {Neutron décrit le réseau voulu ; le commutateur virtuel de chaque nœud le réalise.};
+\end{tikzpicture}}
+\caption{Neutron et ses voisins. La requête est authentifiée (1, 2). Nova obtient de Neutron les ports de ses instances et
+reçoit des événements (3). Neutron fait configurer le commutateur virtuel des nœuds (4).}
+\label{fig:neu-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts et topologie}\label{sec:neu-concepts}
+% ---------------------------------------------------------------------
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{8.4cm}>{\raggedright\arraybackslash\ttfamily}p{3.7cm}@{}}
+\toprule
+\textbf{Objet} & \textbf{Définition} & \textrm{\textbf{Commande}} \\
+\midrule
+\Gls{reseau} & Domaine de diffusion de niveau 2 isolé, auquel on rattache des ports. & openstack network create \\
+\Gls{sousreseau} & Plage d'adresses IP d'un réseau, avec passerelle et DHCP. & openstack subnet create \\
+\Gls{port} & Point de connexion d'un équipement (une carte réseau d'instance) à un réseau ; il porte MAC, IP et groupes de sécurité. & openstack port create \\
+\Gls{routeur} & Relie des réseaux entre eux et vers l'extérieur, avec NAT. & openstack router create \\
+\Gls{groupesecurite} & Règles de pare-feu appliquées aux ports. & openstack security group create \\
+\Gls{ipflottante} & Adresse publique associée à une instance. & openstack floating ip create \\
+\bottomrule
+\end{tabular}
+\caption{Les objets de Neutron \parencite{neutron-intro}.}
+\label{tab:neu-objets}
+\end{table}
+
+La figure~\ref{fig:neu-topo} montre ces objets dans la topologie classique d'un projet : un réseau privé, un routeur, et un
+réseau externe qui mène à Internet. L'instance sans IP flottante sort par le routeur, dont la passerelle fait la traduction
+d'adresse source (SNAT) ; l'instance qui a une IP flottante est aussi joignable de l'extérieur (traduction de destination).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pgris, minimum width=4.0cm] (in) at (6.5,7.2) {Internet};
+  \node[pgris, minimum width=12.4cm, fill=insagris!25] (ex) at (6.5,5.8) {Réseau provider \texttt{provider-net} \ $\cdot$ \ 203.0.113.0/24 \ $\cdot$ \ externe};
+  \node[pfoc, minimum width=3.2cm, minimum height=1.0cm] (rt) at (6.5,3.9) {Routeur \texttt{router1}};
+  \node[psvc, minimum width=12.4cm] (pr) at (6.5,2.0) {Réseau self-service \texttt{private-net} \ $\cdot$ \ 10.10.10.0/24};
+  \node[pcli, minimum width=3.4cm, text width=3.2cm] (v1) at (3.0,0.0) {\texttt{vm1}\\ {\scriptsize\mdseries 10.10.10.11}};
+  \node[pcli, minimum width=3.4cm, text width=3.2cm] (v2) at (10.0,0.0) {\texttt{vm2}\\ {\scriptsize\mdseries 10.10.10.12 + 203.0.113.25}};
+  \draw[thick, insagris] (in) -- (ex);
+  \draw[fluxo] (rt) -- (ex.south -| rt) node[etiqf, midway, right=2pt] {passerelle externe, SNAT};
+  \draw[fluxo] (rt) -- (pr.north -| rt) node[etiqf, midway, right=2pt] {10.10.10.1};
+  \draw[thick, insagris] (v1.north) -- (pr.south -| v1) node[etiqf, midway, right=2pt] {port};
+  \draw[thick, insagris] (v2.north) -- (pr.south -| v2) node[etiqf, midway, right=2pt] {port};
+  \draw[fluxd] (ex.east) -- ++(1.1,0) |- (v2.east) node[etiqf, pos=0.25, right=2pt, text width=2.2cm] {IP flottante 203.0.113.25 (DNAT)};
+  \node[callout, minimum width=14.0cm] at (6.5,-1.3)
+    {Le routeur est la seule voie entre un réseau privé et l'extérieur.};
+\end{tikzpicture}}
+\caption{Topologie classique d'un projet. Chaque instance se connecte au réseau privé par un port ; le routeur relie ce
+réseau au réseau externe. Une IP flottante associée à \texttt{vm2} la rend joignable de l'extérieur.}
+\label{fig:neu-topo}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Réseaux provider et self-service}\label{sec:neu-types}
+% ---------------------------------------------------------------------
+
+Deux familles de réseaux se distinguent par leur propriétaire et leur réalisation, pas par l'API : dans les deux cas,
+on manipule le même réseau, sous-réseau et port \parencite{neutron-intro}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{6.2cm}>{\raggedright\arraybackslash}p{6.3cm}@{}}
+\toprule
+ & \textbf{\Gls{provider}} & \textbf{\Gls{selfservice}} \\
+\midrule
+Créé par & L'administrateur. & Un projet, sans droits d'administrateur. \\
+Réalisation & Posé sur un réseau physique : \emph{flat} ou \gls{vlan}. & \Gls{overlay} : \gls{vxlan} ou Geneve au-dessus du réseau IP. \\
+Routeur & Inutile : le réseau physique fait le travail. & Obligatoire pour sortir (SNAT, DNAT). \\
+Limite & Un VLAN par réseau, soit 4094 au plus. & Aucune limite de VLAN ; coût de l'encapsulation. \\
+Usage & Simplicité, performance, accès à un réseau existant. & Isolation entre projets, réseaux à la demande. \\
+\bottomrule
+\end{tabular}
+\caption{Réseaux provider et self-service.}
+\label{tab:neu-types}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  % réseau provider
+  \node[font=\footnotesize\bfseries, text=insarouge] at (2.6,5.0) {Réseau provider (VLAN 100)};
+  \node[pcli, minimum width=3.0cm] (pv) at (2.6,3.9) {VM};
+  \node[pgris, minimum width=3.4cm] (pb) at (2.6,2.4) {pont \texttt{br-provider}};
+  \node[pgris, minimum width=4.2cm, fill=insagris!25] (ps) at (2.6,0.9) {Commutateur physique};
+  \draw[fluxo] (pv) -- (pb);
+  \draw[fluxo] (pb) -- (ps) node[etiqf, midway, right=2pt] {trames étiquetées VLAN 100};
+  % réseau self-service
+  \node[font=\footnotesize\bfseries, text=insarouge] at (11.4,5.0) {Réseau self-service (overlay)};
+  \draw[insaorange, thick, rounded corners=4pt, fill=insapeche!30] (7.6,1.6) rectangle (10.0,4.4);
+  \draw[insaorange, thick, rounded corners=4pt, fill=insapeche!30] (12.8,1.6) rectangle (15.2,4.4);
+  \node[font=\scriptsize\bfseries, text=insaorange] at (8.8,4.15) {Nœud 1};
+  \node[font=\scriptsize\bfseries, text=insaorange] at (14.0,4.15) {Nœud 2};
+  \node[pcli, minimum width=1.6cm] (v1) at (8.8,3.3) {VM};
+  \node[pgris, minimum width=1.9cm, font=\scriptsize\bfseries] (o1) at (8.8,2.2) {Open vSwitch};
+  \node[pcli, minimum width=1.6cm] (v2) at (14.0,3.3) {VM};
+  \node[pgris, minimum width=1.9cm, font=\scriptsize\bfseries] (o2) at (14.0,2.2) {Open vSwitch};
+  \draw[fluxo] (v1) -- (o1);
+  \draw[fluxo] (v2) -- (o2);
+  \draw[<->, thick, insarouge] (o1.east) -- (o2.west) node[etiqf, midway, above=2pt, text width=2.0cm] {tunnel VXLAN ou Geneve};
+  \node[pgris, minimum width=7.4cm, fill=insagris!25] at (11.4,0.9) {Réseau IP physique};
+  \draw[thick, insagris] (8.8,1.6) -- (8.8,1.2);
+  \draw[thick, insagris] (14.0,1.6) -- (14.0,1.2);
+  \node[callout, minimum width=15.6cm] at (8.0,-0.5)
+    {Provider : le trafic sort tel quel sur le VLAN physique. Self-service : le trafic est encapsulé dans un tunnel entre nœuds.};
+\end{tikzpicture}}
+\caption{Réalisation des deux familles de réseaux. À gauche, un VLAN physique ; à droite, un tunnel entre les nœuds de calcul.}
+\label{fig:neu-types}
+\end{figure}
+
+Les commandes de création suivent cette différence : l'administrateur décrit le lien physique, le projet n'a rien à préciser.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack network create provider-net --provider-network-type vlan \
+    --provider-physical-network physnet1 --provider-segment 100 \
+    --external --share
+$ openstack subnet create provider-subnet --network provider-net \
+    --subnet-range 203.0.113.0/24 \
+    --allocation-pool start=203.0.113.20,end=203.0.113.200
+$ openstack network create private-net
+$ openstack subnet create private-subnet --network private-net \
+    --subnet-range 10.10.10.0/24
+$ openstack router create router1
+$ openstack router add subnet router1 private-subnet
+$ openstack router set router1 --external-gateway provider-net
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Architecture : ML2 et agents}\label{sec:neu-archi}
+% ---------------------------------------------------------------------
+
+Le serveur \texttt{neutron-server} reçoit les requêtes de l'API et enregistre l'état voulu dans sa base. Il confie le travail
+au plugin \gls{ml2}, qui orchestre deux familles de pilotes \parencite{neutron-ml2} :
+
+\begin{itemize}
+  \item les \emph{type drivers} disent \emph{comment} un réseau est encodé : \texttt{flat}, \texttt{vlan}, \texttt{vxlan},
+        \texttt{geneve} ;
+  \item les \emph{mechanism drivers} disent \emph{qui} le réalise : Open vSwitch, OVN, SR-IOV\dots
+\end{itemize}
+
+Avec Open vSwitch, des \glspl{agentneutron} tournent sur les nœuds et dialoguent avec le serveur par le bus de messages
+(figure~\ref{fig:neu-archi}). Le tableau~\ref{tab:neu-agents} les décrit.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,5.7) rectangle (11.4,9.3);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,9.2) {\texttt{neutron-server}};
+  \node[psvc, minimum width=2.8cm] (api) at (2.2,7.5) {API REST\\ {\scriptsize\mdseries port 9696}};
+  \node[pfoc, minimum width=2.6cm] (ml) at (6.0,8.2) {Plugin ML2};
+  \node[psvc, minimum width=3.2cm, font=\scriptsize\bfseries] (td) at (4.7,6.4) {Type drivers\\ {\scriptsize\mdseries flat, VLAN, VXLAN, Geneve}};
+  \node[psvc, minimum width=3.2cm, font=\scriptsize\bfseries] (md) at (8.5,6.4) {Mechanism drivers\\ {\scriptsize\mdseries Open vSwitch, OVN}};
+  \draw[fluxo] (api.east) -- (ml.west);
+  \draw[fluxo] (ml.south) -- (td.north);
+  \draw[fluxo] (ml.south) -- (md.north);
+  \node[pdat, minimum width=3.2cm] (db) at (13.8,7.5) {Base \texttt{neutron}};
+  \draw[<->, thick, insagris] (11.4,7.5) -- (db.west);
+  \node[pgris, minimum width=15.6cm, font=\scriptsize\bfseries] (bus) at (8.0,4.5)
+    {Bus de messages (RabbitMQ) : RPC entre le serveur et les agents};
+  \draw[<->, thick, insagris] (5.8,5.7) -- (5.8,4.8);
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,0.0) rectangle (7.6,3.7);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,3.6) {Nœud de calcul};
+  \node[psvc, minimum width=2.6cm, font=\scriptsize\bfseries] (l2) at (2.1,2.2) {agent L2};
+  \node[pgris, minimum width=2.6cm, font=\scriptsize\bfseries] (vsw) at (5.5,2.2) {Open vSwitch};
+  \node[pcli, minimum width=2.0cm] (vm) at (5.5,0.8) {VM};
+  \draw[fluxo] (l2) -- (vsw);
+  \draw[<->, thick, insagris] (vm.north) -- (vsw.south);
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (8.4,0.0) rectangle (15.8,3.7);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (8.55,3.6) {Nœud réseau (ou contrôleur)};
+  \node[psvc, minimum width=2.6cm, font=\scriptsize\bfseries] at (10.1,2.4) {agent L3};
+  \node[psvc, minimum width=2.6cm, font=\scriptsize\bfseries] at (13.5,2.4) {agent DHCP};
+  \node[psvc, minimum width=3.6cm, font=\scriptsize\bfseries] at (11.8,1.0) {agent métadonnées};
+  \draw[<->, thick, insagris] (3.9,3.7) -- (3.9,4.2);
+  \draw[<->, thick, insagris] (12.1,3.7) -- (12.1,4.2);
+  \node[callout, minimum width=15.6cm] at (8.0,-0.9)
+    {Avec OVN, ces agents disparaissent : un seul démon par nœud, \texttt{ovn-controller}, lit une base de données (section~\ref{sec:neu-ovn}).};
+\end{tikzpicture}}
+\caption{Neutron avec le mechanism driver Open vSwitch. Le plugin ML2 combine type drivers et mechanism drivers ; les
+agents des nœuds réalisent les ordres reçus par le bus de messages.}
+\label{fig:neu-archi}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{12.3cm}@{}}
+\toprule
+\textbf{Agent} & \textbf{Rôle} \\
+\midrule
+Agent L2 (Open vSwitch) & Sur chaque nœud : traduit ports et réseaux en ponts et en règles Open vSwitch. \\
+Agent L3 & Réalise les routeurs (dans des espaces de noms Linux), avec NAT et IP flottantes. \\
+Agent DHCP & Un processus \texttt{dnsmasq} par réseau : attribue adresses et paramètres aux instances. \\
+Agent de métadonnées & Relaie les requêtes des instances vers l'API de métadonnées de Nova. \\
+\bottomrule
+\end{tabular}
+\caption{Agents Neutron avec Open vSwitch \parencite{neutron-intro}.}
+\label{tab:neu-agents}
+\end{table}
+
+Sur un nœud de calcul, \gls{ovs} utilise en général trois ponts : \texttt{br-int} relie localement les instances,
+\texttt{br-tun} encapsule le trafic overlay vers les autres nœuds, et un pont externe (\texttt{br-ex}, \texttt{br-provider}) donne
+l'accès au réseau physique. Chaque pont applique des règles OpenFlow (\emph{flows}). On les inspecte avec :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ ovs-vsctl show
+$ ovs-vsctl list-ports br-int
+$ ovs-ofctl dump-flows br-int
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{OVN : réseau déclaratif}\label{sec:neu-ovn}
+% ---------------------------------------------------------------------
+
+Le modèle à agents a des limites : un agent par fonction et par nœud, qui interrogent régulièrement le serveur par RPC
+(latence à grande échelle), des routeurs souvent centralisés sur un nœud réseau, un diagnostic complexe. \gls{ovn} change de
+modèle : au lieu d'ordres envoyés aux agents, Neutron écrit l'état voulu dans une base de données, et chaque nœud
+réalise ce qui le concerne \parencite{neutron-ovn-faq}. Le pilote ML2/OVN dialogue avec les bases par le protocole
+\texttt{ovsdb}, pas par RabbitMQ.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=0.95\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=3.6cm, text width=3.4cm] (a) at (0,2.2) {\texttt{neutron-server}\\ {\scriptsize\mdseries pilote ML2/OVN}};
+  \node[pdat, minimum width=3.6cm, text width=3.4cm] (b) at (4.8,2.2) {Base Northbound\\ {\scriptsize\mdseries état voulu}};
+  \node[psvc, minimum width=3.6cm, text width=3.4cm] (c) at (9.6,2.2) {\texttt{ovn-northd}\\ {\scriptsize\mdseries compile en flux logiques}};
+  \node[pdat, minimum width=3.6cm, text width=3.4cm] (d) at (9.6,0) {Base Southbound\\ {\scriptsize\mdseries état réalisé}};
+  \node[psvc, minimum width=3.6cm, text width=3.4cm] (e) at (4.8,0) {\texttt{ovn-controller}\\ {\scriptsize\mdseries sur chaque nœud}};
+  \node[pfoc, minimum width=3.6cm, text width=3.4cm] (f) at (0,0) {Flux Open vSwitch\\ {\scriptsize\mdseries pont \texttt{br-int}}};
+  \draw[fluxo] (a) -- (b) node[etiqf, midway, above=1pt] {écrit};
+  \draw[fluxo] (b) -- (c) node[etiqf, midway, above=1pt] {lit};
+  \draw[fluxo] (c) -- (d) node[etiqf, midway, right=2pt] {écrit};
+  \draw[fluxo] (d) -- (e) node[etiqf, midway, above=1pt] {lit};
+  \draw[fluxo] (e) -- (f) node[etiqf, midway, above=1pt] {installe};
+  \node[callout, minimum width=11.2cm] at (4.8,-1.7)
+    {Le routage, le DHCP et les règles de sécurité sont réalisés sur chaque nœud, sans nœud réseau central.};
+\end{tikzpicture}}
+\caption{Architecture d'OVN. Neutron décrit le réseau dans la base Northbound ; \texttt{ovn-northd} le traduit en base
+Southbound ; chaque \texttt{ovn-controller} le réalise sur son nœud.}
+\label{fig:neu-ovn}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.8cm}>{\raggedright\arraybackslash}p{6.2cm}>{\raggedright\arraybackslash}p{6.5cm}@{}}
+\toprule
+ & \textbf{ML2/OVS (agents)} & \textbf{OVN} \\
+\midrule
+Modèle & Impératif : agents, RPC par RabbitMQ. & Déclaratif : bases Northbound et Southbound. \\
+Routage L3 & Souvent centralisé (nœud réseau) ou distribué (DVR). & Distribué sur chaque nœud. \\
+DHCP & Agent dédié (\texttt{dnsmasq} par réseau). & Intégré à OVN, distribué. \\
+Composants & Agents L2, L3, DHCP, métadonnées. & \texttt{ovn-northd}, \texttt{ovn-controller}, deux bases. \\
+Passage à l'échelle & Limité par le nombre d'agents et de RPC. & Conçu pour les grands déploiements. \\
+\bottomrule
+\end{tabular}
+\caption{ML2/OVS et OVN \parencite{neutron-ovn-faq}.}
+\label{tab:neu-ovn}
+\end{table}
+
+OVN est aujourd'hui le pilote recommandé pour les nouveaux déploiements ; ML2/OVS reste très présent dans les
+infrastructures existantes. Pour l'utilisateur, l'API et les commandes ne changent pas.
+
+% ---------------------------------------------------------------------
+\subsection{Du port à l'instance}\label{sec:neu-port}
+% ---------------------------------------------------------------------
+
+Quand Nova crée une instance, il demande à Neutron un port par carte réseau ; l'instance ne démarre qu'une fois le
+port prêt. La figure~\ref{fig:neu-seq} détaille cet échange. Le serveur Neutron prévient Nova par un événement
+(\texttt{network-vif-plugged}), envoyé grâce aux identifiants de la section \texttt{[nova]} de \texttt{neutron.conf}
+\parencite{neutron-install-controller}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (a) at (0.8,0) {nova-api};
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (c) at (5.2,0) {nova-\\compute};
+  \node[acteur, minimum width=2.6cm, fill=insarouge, text=white, draw=black] (n) at (9.6,0) {neutron-\\server};
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (g) at (14.0,0) {Agent OVS\\ ou OVN};
+  \foreach \x in {a,c,n,g} \draw[vie] (\x.south) -- ++(0,-7.4);
+  \seqmsg{5.2}{9.6}{-1.3}{1}{créer et lier le port\\ (réseau, groupes)}
+  \seqrep{9.6}{5.2}{-2.2}{}{port : MAC, IP}
+  \seqmsg{9.6}{14.0}{-3.1}{2}{configurer le port}
+  \node[callout, font=\scriptsize, text width=3.2cm] at (5.2,-4.0) {brancher l'interface sur \texttt{br-int}};
+  \seqrep{14.0}{9.6}{-4.9}{3}{port actif}
+  \seqmsg{9.6}{0.8}{-5.8}{4}{événement\\ \texttt{network-vif-plugged}}
+  \seqmsg{0.8}{5.2}{-6.9}{5}{poursuivre le démarrage}
+\end{tikzpicture}}
+\caption{Création d'un port pour une instance. Nova demande et lie le port (1), Neutron fait configurer le nœud (2) et
+signale à Nova, quand le port est actif (3, 4), qu'il peut poursuivre (5).}
+\label{fig:neu-seq}
+\end{figure}
+
+Le port reçoit une adresse du sous-réseau et ses groupes de sécurité. Le serveur DHCP du réseau annonce ensuite cette
+adresse à l'instance. L'instance joint le service de métadonnées à l'adresse \texttt{169.254.169.254} : l'agent de
+métadonnées (ou OVN) relaie la requête vers Nova.
+
+% ---------------------------------------------------------------------
+\subsection{Groupes de sécurité et IP flottantes}\label{sec:neu-securite}
+% ---------------------------------------------------------------------
+
+Un \gls{groupesecurite} est un ensemble de règles de pare-feu appliquées au niveau du \emph{port}. Chaque projet a un
+groupe \texttt{default} : il refuse tout trafic entrant et autorise tout trafic sortant. Les règles sont \emph{avec état} :
+autoriser SSH en entrée autorise aussi les paquets de réponse \parencite{neutron-intro}. Une règle précise la direction, le
+protocole, la plage de ports et la source (un préfixe IP, ou un autre groupe de sécurité). Un port peut avoir plusieurs
+groupes ; leurs règles s'ajoutent.
+
+Une \gls{ipflottante} est une adresse du réseau externe qu'on associe à un port : le routeur traduit l'adresse publique
+en adresse privée (\gls{nat} un pour un). L'adresse peut être détachée et réutilisée.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack security group create web
+$ openstack security group rule create --protocol tcp --dst-port 22 --remote-ip 192.0.2.0/24 web
+$ openstack security group rule create --protocol icmp web
+$ openstack server add security group vm1 web
+$ openstack floating ip create provider-net
+$ openstack server add floating ip vm1 203.0.113.25
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre}\label{sec:neu-deploiement}
+% ---------------------------------------------------------------------
+
+Sur le contrôleur, l'installation crée une base \texttt{neutron}, l'utilisateur et le service de type \texttt{network}
+dans Keystone (port 9696), puis configure \texttt{neutron.conf}, le plugin ML2 et l'agent de métadonnées. Elle règle aussi la
+section \texttt{[neutron]} de \texttt{nova.conf} (avec \texttt{service\_metadata\_proxy = true} et le même secret partagé que
+l'agent de métadonnées) \parencite{neutron-install-controller}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/neutron/neutron.conf (extrait)
+[DEFAULT]
+core_plugin = ml2
+service_plugins = router
+transport_url = rabbit://openstack:RABBIT_PASS@controller
+auth_strategy = keystone
+# /etc/neutron/plugins/ml2/ml2_conf.ini (extrait)
+[ml2]
+type_drivers = flat,vlan,vxlan
+tenant_network_types = vxlan
+mechanism_drivers = openvswitch,l2population
+[ml2_type_vxlan]
+vni_ranges = 1:1000
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# su -s /bin/sh -c "neutron-db-manage --config-file /etc/neutron/neutron.conf \
+      --config-file /etc/neutron/plugins/ml2/ml2_conf.ini upgrade head" neutron
+# systemctl restart nova-api neutron-server neutron-openvswitch-agent \
+      neutron-dhcp-agent neutron-metadata-agent neutron-l3-agent
+$ openstack network agent list
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{5.5cm}>{\raggedright\arraybackslash}p{5.6cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+L'instance n'a pas d'adresse & Agent DHCP absent ou sous-réseau sans DHCP. & \texttt{openstack network agent list} ; \texttt{openstack subnet show} \\
+Ping impossible vers l'instance & Aucune règle ICMP ou SSH dans le groupe de sécurité. & \texttt{openstack security group rule list} \\
+L'instance ne sort pas vers Internet & Routeur sans passerelle externe, ou sous-réseau non relié. & \texttt{openstack router show} \\
+IP flottante injoignable & IP non associée, ou règle de sécurité manquante. & \texttt{openstack floating ip list} \\
+Instance en erreur : port non lié & Agent ou pilote indisponible sur l'hôte. & \texttt{openstack port show} (champ \texttt{binding\_vif\_type}) \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Neutron.}
+\label{tab:neu-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:neu-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Choisir le type de réseau}\label{ex:neu-types}
+Pour chaque besoin, choisir réseau provider ou self-service, et justifier : (a)~une base de données existante, déjà sur
+le VLAN 200 du centre de calcul, doit être jointe directement ; (b)~chaque équipe d'étudiants doit créer ses propres
+réseaux, isolés des autres ; (c)~une plateforme doit héberger 6\,000 réseaux de projets.
+\end{exercice}
+\begin{correction}
+(a)~Provider VLAN 200 : le réseau physique existe déjà, sans routeur ni encapsulation. (b)~Self-service : les projets
+créent leurs réseaux sans administrateur, dans des tunnels. (c)~Self-service : un VLAN est limité à 4094 réseaux, pas un
+overlay.
+\end{correction}
+
+\begin{exercice}{Écrire les règles}\label{ex:neu-regles}
+Une instance doit accepter SSH depuis \texttt{192.0.2.0/24} et HTTP depuis n'importe où, et rien d'autre. Écrire les
+commandes. Pourquoi n'a-t-on pas à autoriser les paquets de réponse ?
+\end{exercice}
+\begin{correction}
+Les trois commandes, puis l'association à l'instance :
+\begin{lstlisting}[style=terminal]
+$ openstack security group create web
+$ openstack security group rule create --protocol tcp --dst-port 22 \
+    --remote-ip 192.0.2.0/24 web
+$ openstack security group rule create --protocol tcp --dst-port 80 \
+    --remote-ip 0.0.0.0/0 web
+$ openstack server add security group vm1 web
+\end{lstlisting}
+Le trafic entrant est refusé par défaut, donc rien d'autre n'entre. Les règles sont avec état : les réponses aux
+connexions autorisées sont acceptées sans règle supplémentaire.
+\end{correction}
+
+\begin{exercice}{Suivre un paquet}\label{ex:neu-chemin}
+Une instance \texttt{vm1} sur \texttt{private-net} (réseau self-service) accède à Internet. Décrire le chemin d'un paquet
+sortant, puis dire quel objet ou composant vérifier si : (a)~\texttt{vm1} n'a pas d'adresse ; (b)~\texttt{vm1} joint
+\texttt{vm2} mais pas Internet ; (c)~\texttt{vm1} sort, mais une IP flottante ne la rend pas joignable de l'extérieur.
+\end{exercice}
+\begin{correction}
+Le paquet traverse le port de \texttt{vm1} (règles du groupe de sécurité), Open vSwitch du nœud, le routeur
+\texttt{router1} qui fait le SNAT, puis le réseau provider. (a)~Le DHCP du réseau (agent DHCP ou OVN) et le sous-réseau.
+(b)~Le routeur : l'interface vers \texttt{private-subnet} et la passerelle externe (\texttt{openstack router show}). (c)~L'association
+de l'IP flottante au bon port et les règles du groupe de sécurité en entrée.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:neu-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Neutron décrit le réseau (réseaux, sous-réseaux, ports, routeurs, groupes de sécurité, IP flottantes) et
+        laisse le commutateur virtuel des nœuds le réaliser.
+  \item Un réseau provider est posé sur un réseau physique (flat, VLAN, 4094 au plus) ; un réseau self-service est un
+        overlay (VXLAN, Geneve) créé par le projet et relié à l'extérieur par un routeur.
+  \item Le plugin ML2 combine des type drivers (comment encoder) et des mechanism drivers (qui réalise : Open vSwitch,
+        OVN).
+  \item Avec Open vSwitch, des agents L2, L3, DHCP et métadonnées tournent sur les nœuds ; OVN les remplace par deux
+        bases de données et un \texttt{ovn-controller} par nœud.
+  \item Nova obtient un port par carte réseau et attend l'événement \texttt{network-vif-plugged} avant de poursuivre.
+  \item Un groupe de sécurité, appliqué au port, refuse l'entrée par défaut et autorise la sortie ; ses règles sont avec
+        état.
+  \item Une IP flottante traduit une adresse publique en adresse privée (NAT) ; le routeur fait le SNAT des sorties.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.0cm}>{\raggedright\arraybackslash}p{10.1cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer réseau et sous-réseau & \texttt{openstack network create N}, \texttt{openstack subnet create S --network N --subnet-range CIDR} & \ref{sec:neu-types} \\
+Relier à l'extérieur & \texttt{openstack router create R}, \texttt{router add subnet R S}, \texttt{router set R --external-gateway E} & \ref{sec:neu-types} \\
+Règle de pare-feu & \texttt{openstack security group rule create --protocol tcp --dst-port 22 G} & \ref{sec:neu-securite} \\
+IP flottante & \texttt{openstack floating ip create E}, \texttt{server add floating ip VM IP} & \ref{sec:neu-securite} \\
+Voir les agents & \texttt{openstack network agent list} & \ref{sec:neu-deploiement} \\
+Inspecter Open vSwitch & \texttt{ovs-vsctl show}, \texttt{ovs-ofctl dump-flows br-int} & \ref{sec:neu-archi} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Choisir un réseau provider ou self-service selon le besoin (exercice~\ref{ex:neu-types}).
+  \item Écrire des règles de groupe de sécurité et expliquer leur comportement (exercice~\ref{ex:neu-regles}).
+  \item Suivre le chemin d'un paquet et situer une panne (exercice~\ref{ex:neu-chemin}).
+\end{itemize}
+\end{savoirfaire}

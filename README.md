@@ -4,7 +4,8 @@ Structure LaTeX d'un cours sur OpenStack, basée sur le template INSA CVL
 (`info_quantiq_tex`) : charte rouge/gris, en-tête avec logo, page de titre, sommaire,
 glossaire, bibliographie biblatex/APA. **Un chapitre = un fichier `chap_<nom>.tex`.**
 **Avancement :** introduction/présentation (squelette), **Keystone** (complet, ~39 pages),
-**Nova** (8 pages) et **Placement** (7 pages) rédigés. Les autres chapitres de service et la
+**Nova** (8 pages), **Placement** (7 pages), **Glance** (7 pages) et **Neutron** (8 pages)
+rédigés. Les autres chapitres de service et la
 conclusion sont encore vides (titre + `\label`) ; ils seront rédigés selon les mêmes règles
 (voir « Conventions des chapitres rédigés »). Keystone est le chapitre « exhaustif » ; les
 suivants sont plus synthétiques (10 pages au plus, schémas conservés).
@@ -23,6 +24,26 @@ Il faut une distribution TeX Live/MiKTeX complète et `biber`.
 la compilation échoue sans lui).
 **À renseigner :** `\docprof` dans le bloc « Informations du document » de `main.tex`.
 
+## En cas d'erreur de compilation
+
+- `I do not know the key '/tikz/pcli'` : `main.tex` est une ancienne copie, sans le second
+  `\tikzset{…}` (styles de schémas). Utiliser le `main.tex` du projet.
+- `Undefined control sequence \seqmsg` (ou `\seqrep`) : les chapitres Nova, Placement et Neutron
+  tracent leurs diagrammes de séquence avec ces deux macros, définies dans `main.tex` juste après
+  le second `\tikzset`. Si elles manquent, les ajouter :
+
+```latex
+\newcommand{\seqmsg}[5]{%
+  \draw[msg] (#1,#3) -- (#2,#3) node[midway, above=1pt, font=\footnotesize, align=center, text=black, fill=white, inner sep=1pt] {#5};%
+  \ifx\relax#4\relax\else\node[num] at ({#1+(#2>#1?-0.4:0.4)},#3) {#4};\fi}
+\newcommand{\seqrep}[5]{%
+  \draw[rep] (#1,#3) -- (#2,#3) node[midway, above=1pt, font=\footnotesize, align=center, text=black, fill=white, inner sep=1pt] {#5};%
+  \ifx\relax#4\relax\else\node[num] at ({#1+(#2>#1?-0.4:0.4)},#3) {#4};\fi}
+```
+
+- Tirets doubles (`--option`) rendus comme un tiret long dans `\texttt`, apostrophes courbes dans
+  les listings : voir « Réglages ajoutés au préambule » en fin de fichier.
+
 ## Arborescence
 
 ```
@@ -33,8 +54,8 @@ chap_presentation.tex 1.  Présentation générale d'OpenStack (sous-sections se
 chap_keystone.tex     2.  Keystone : identité  (RÉDIGÉ, ~39 pages)
 chap_nova.tex         3.  Nova : calcul  (RÉDIGÉ, 8 pages)
 chap_placement.tex    4.  Placement : suivi des ressources  (RÉDIGÉ, 7 pages)
-chap_glance.tex       5.  Glance : images
-chap_neutron.tex      6.  Neutron : réseau
+chap_glance.tex       5.  Glance : images  (RÉDIGÉ, 7 pages)
+chap_neutron.tex      6.  Neutron : réseau  (RÉDIGÉ, 8 pages)
 chap_cinder.tex       7.  Cinder : stockage bloc
 chap_horizon.tex      8.  Horizon : tableau de bord
 chap_octavia.tex      9.  Octavia : répartition de charge
@@ -45,8 +66,8 @@ chap_magnum.tex       13. Magnum : Kubernetes managé
 chap_trove.tex        14. Trove : bases de données (DBaaS)
 chap_deploiement.tex  15. Méthodes de déploiement (hors service)
 conclusion.tex        Conclusion (non numérotée, vide)
-glossaire.tex         Entrées du glossaire (~54 entrées : Keystone, Nova, Placement)
-sources.bib           Bibliographie (42 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Trove)
+glossaire.tex         Entrées du glossaire (73 entrées : Keystone, Nova, Placement, Glance, Neutron)
+sources.bib           Bibliographie (58 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Glance, Neutron, Trove)
 images/               logo_insa.png à y déposer
 ```
 
@@ -60,8 +81,8 @@ pour réordonner ou retirer un chapitre, déplacer ou supprimer une ligne.
 |---|---|
 | Présentation générale | Introduction_OpenStack : cloud, IaaS, architecture, multi-nœuds, scénario « création d'une VM », comparaisons |
 | Keystone | Introduction (identité, authentification/autorisation) ; Chapitre 5 partie 1 (domaines, fédération SAML2/OIDC) |
-| Nova, Placement (rédigés) ; Glance, Horizon, Octavia | Introduction_OpenStack (une partie chacun) |
-| Neutron | Introduction (concepts, ports, security groups) ; Chapitre 2 (provider/self-service, OVS, OVN, ML2) |
+| Nova, Placement, Glance (rédigés) ; Horizon, Octavia | Introduction_OpenStack (une partie chacun) |
+| Neutron (rédigé) | Introduction (concepts, ports, security groups) ; Chapitre 2 (provider/self-service, OVS, OVN, ML2) |
 | Cinder | Introduction ; Chapitre 3 partie 1 (multi-backend, volume types, QoS, snapshots, backups) |
 | Swift | Chapitre 3 partie 2 |
 | Heat | Chapitre 3 partie 3 |
@@ -113,7 +134,7 @@ destination d'un `to[...]` (le nœud se retrouve alors sur la destination, pas s
 
 - Un chapitre = une `\section{…}\label{chap:<nom>}` ; sous-sections `sec:<nom>-<sujet>`,
   figures `fig:<nom>-…`, tableaux `tab:<nom>-…`, exercices `ex:<nom>-…`.
-- Chapitres synthétiques (Nova, Placement et suivants) : 10 pages au plus ; mêmes sections, mais
+- Chapitres synthétiques (Nova, Placement, Glance, Neutron et suivants) : 10 pages au plus ; mêmes sections, mais
   une figure par idée clé (environnement, architecture, séquence, ordonnancement/états), 3 exercices
   courts et un récapitulatif sans schéma de synthèse.
 - Contenu type : rôle du service et place dans OpenStack (schéma structure + interactions) ;

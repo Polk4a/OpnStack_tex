@@ -2,10 +2,483 @@
 %  Chapitre « Glance : le service d'images »
 %  Fichier importé par main.tex avec \include{chap_glance}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Introduction à OpenStack » (partie 6) et « Chapitre 3 »
+%  (Swift), documentation officielle de Glance (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Glance : le service d'images}\label{chap:glance}
+% =====================================================================
+
+Glance garde les images à partir desquelles Nova crée les instances. Ce chapitre présente son rôle, la
+séparation entre métadonnées et données d'une image, les formats, les statuts, la visibilité, les deux façons
+d'ajouter une image (téléversement classique et import), les stockages possibles et la mise en œuvre.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Glance}\label{sec:gl-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Glance}
+Glance est le service d'images d'OpenStack (projet \emph{Image}). Il enregistre, découvre et distribue les
+\glspl{image} de machines virtuelles, avec leurs métadonnées : nom, taille, format, propriétés
+\parencite{glance-admin}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Disposer de modèles de machines prêts à l'emploi (Ubuntu, Windows, une image
+        d'application), partagés entre projets et conservés à un seul endroit.
+  \item \textbf{Communique avec.} Keystone (authentification), Nova (qui récupère l'image au démarrage d'une
+        instance), Cinder (création d'un volume amorçable à partir d'une image, ou l'inverse), et les systèmes de
+        stockage où les données sont placées : disque local, Ceph, Swift\dots
+  \item \textbf{Exemple.} ajouter une image que les instances pourront ensuite utiliser :
+\begin{lstlisting}[style=terminal]
+$ openstack image create --file ubuntu.qcow2 \
+    --disk-format qcow2 --container-format bare ubuntu
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,6.6) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (gl) at (6.4,3.7)
+    {Glance\\ {\scriptsize\mdseries images}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,3.7) {Keystone};
+  \node[psvc, minimum width=2.6cm] (no) at (11.9,5.4) {Nova};
+  \node[psvc, minimum width=2.6cm] (ci) at (11.9,2.0) {Cinder};
+  \node[pdat, minimum width=3.6cm] (db) at (0.9,1.3) {Base \texttt{glance}\\ {\scriptsize\mdseries métadonnées}};
+  \node[pgris, minimum width=10.4cm] (st) at (6.4,0.3)
+    {Stores : disque local \ $\cdot$ \ Ceph (rbd) \ $\cdot$ \ Swift \ $\cdot$ \ Cinder};
+  \draw[fluxr] (cli) -- (gl)
+    node[num, pos=0.3] {1} node[etiqf, midway, left=4mm, text width=2.8cm, align=right] {\texttt{POST /v2/images}, puis les données};
+  \draw[fluxo] (gl.west) -- (ks.east)
+    node[num, pos=0.15, above=3pt] {2} node[etiqf, midway, below=2pt] {valide le token};
+  \draw[fluxo] (no.west) -- (gl.north east)
+    node[num, pos=0.15, above=3pt] {3} node[etiqf, midway, above=2pt] {télécharge l'image};
+  \draw[fluxo] (ci.west) -- (gl.south east) node[etiqf, pos=0.56, below=2pt, text width=2.3cm] {volume à partir de l'image};
+  \draw[<->, thick, insagris] (gl.south west) -- (db.north east);
+  \draw[fluxr] (gl.south) -- (st.north)
+    node[num, pos=0.45] {4} node[etiqf, midway, right=5mm] {les données};
+  \node[callout, minimum width=13.4cm] at (6.4,-0.9)
+    {Glance sépare les métadonnées (en base) des données (dans un store) ; il ne démarre aucune machine.};
+\end{tikzpicture}}
+\caption{Glance et ses voisins. Le client crée l'image et envoie ses données (1) après validation du token (2). Nova
+la télécharge quand il crée une instance (3). Les données vont dans un store, les métadonnées dans la base (4).}
+\label{fig:gl-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : métadonnées, données, formats}\label{sec:gl-concepts}
+% ---------------------------------------------------------------------
+
+Une \gls{image} se compose de deux parties : un enregistrement de \emph{métadonnées} dans la base de Glance et des
+\emph{données}, le fichier du disque, dans un \gls{store}. Les métadonnées décrivent l'image
+(tableau~\ref{tab:gl-champs}) ; Nova et Cinder s'en servent avant même de lire les données
+\parencite{glance-api-ref}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{3.6cm}>{\raggedright\arraybackslash}p{11.9cm}@{}}
+\toprule
+\textrm{\textbf{Champ}} & \textbf{Rôle} \\
+\midrule
+name, id, owner & Nom, identifiant (UUID) et projet propriétaire. \\
+status & État de l'image (section~\ref{sec:gl-statuts}). \\
+visibility & Qui peut voir l'image : \texttt{public}, \texttt{private}, \texttt{shared}, \texttt{community}. \\
+disk\_format, container\_format & Format du fichier disque et de son enveloppe (voir ci-dessous). \\
+min\_disk, min\_ram & Disque (Go) et mémoire (Mo) minimaux pour démarrer l'image. \\
+size, virtual\_size & Taille du fichier et taille du disque virtuel qu'il représente. \\
+os\_hash\_algo, os\_hash\_value & Empreinte des données, pour vérifier l'intégrité (\texttt{checksum}, en MD5, est déprécié). \\
+protected & Si vrai, l'image ne peut pas être supprimée. \\
+tags, properties & Étiquettes libres et propriétés clé-valeur (section~\ref{sec:gl-proprietes}). \\
+\bottomrule
+\end{tabular}
+\caption{Principaux champs d'une image \parencite{glance-api-ref}.}
+\label{tab:gl-champs}
+\end{table}
+
+Le format de disque (\texttt{disk\_\allowbreak format}) dit comment lire le fichier ; le format de conteneur
+(\texttt{container\_\allowbreak format}) dit s'il est enveloppé. Glance ne vérifie pas que le format de conteneur déclaré
+correspond aux données \parencite{glance-formats}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{3.0cm}>{\raggedright\arraybackslash}p{12.5cm}@{}}
+\toprule
+\textrm{\textbf{Format}} & \textbf{Usage} \\
+\midrule
+raw & Disque brut, sans structure ; pris en charge nativement par KVM et Xen. \\
+qcow2 & Format de QEMU à copie sur écriture : fichier compact, qui grossit avec les données ; le plus courant avec KVM. \\
+vmdk, vhd, vhdx, vdi & Formats de VMware, de Microsoft et Xen, et de VirtualBox : on les convertit en général. \\
+iso & Image disque en lecture seule (ISO 9660), par exemple un support d'installation. \\
+ami, aki, ari & Formats Amazon : image, noyau, disque mémoire initial. \\
+bare & Format de conteneur : aucune enveloppe. C'est la valeur usuelle. \\
+ovf, ova, docker, compressed & Autres conteneurs : paquet OVF, son archive tar, archive Docker, données compressées. \\
+\bottomrule
+\end{tabular}
+\caption{Formats de disque (haut) et de conteneur (bas) \parencite{glance-formats}.}
+\label{tab:gl-formats}
+\end{table}
+
+\begin{pointcle}
+Pour une instance sur KVM, on dépose en général une image \texttt{qcow2} avec le conteneur \texttt{bare}. Quand les
+disques sont sur Ceph, le format \texttt{raw} est préférable : une image \texttt{qcow2} doit d'abord être convertie. Glance
+peut le faire à l'import (section~\ref{sec:gl-import}).
+\end{pointcle}
+
+% ---------------------------------------------------------------------
+\subsection{Statuts d'une image}\label{sec:gl-statuts}
+% ---------------------------------------------------------------------
+
+L'état d'une image évolue de sa création à sa suppression (figure~\ref{fig:gl-statuts}). Seule une image
+\texttt{active} peut servir à créer une instance \parencite{glance-statuses}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    etat/.style={pastille, psvc, minimum width=2.4cm, font=\scriptsize\bfseries}]
+  \node[pcli, minimum width=2.4cm, font=\scriptsize\bfseries] (q) at (0,2.2) {queued};
+  \node[etat] (sa) at (3.3,3.4) {saving};
+  \node[etat] (up) at (3.3,1.0) {uploading};
+  \node[etat] (im) at (6.4,1.0) {importing};
+  \node[pfoc, minimum width=2.4cm, font=\scriptsize\bfseries] (ac) at (9.5,2.2) {active};
+  \node[pdat, minimum width=2.4cm, font=\scriptsize\bfseries] (ki) at (6.2,4.5) {killed};
+  \node[etat] (de) at (9.5,4.4) {deactivated};
+  \node[etat] (pd) at (9.5,-0.2) {pending\_delete};
+  \node[pgris, minimum width=2.4cm, font=\scriptsize\bfseries] (dl) at (13.3,-0.2) {deleted};
+  \draw[fluxo] (q) -- (sa) node[etiqf, midway, above left=0pt and -2pt] {envoi direct};
+  \draw[fluxo] (q) -- (up) node[etiqf, midway, below left=0pt and -2pt] {stage};
+  \draw[fluxo] (up) -- (im) node[etiqf, midway, above=1pt] {import};
+  \draw[fluxo] (sa) -- (ac);
+  \draw[fluxo] (im) -- (ac);
+  \draw[fluxd] (sa) -- (ki) node[etiqf, midway, above left=-1pt and -3pt] {erreur};
+  \draw[<->, thick, insaorange] (ac.north) -- (de.south)
+    node[etiqf, midway, right=2pt, text width=2.1cm] {deactivate / reactivate};
+  \draw[fluxo] (ac.south) -- (pd.north) node[etiqf, midway, right=2pt] {suppression};
+  \draw[fluxo] (pd) -- (dl);
+  \node[callout, minimum width=12.4cm] at (6.2,-1.5)
+    {Une image \texttt{deactivated} reste enregistrée, mais ses données ne sont plus lisibles par les non-administrateurs.};
+\end{tikzpicture}}
+\caption{Statuts d'une image. Le téléversement direct passe par \texttt{saving}, l'import par \texttt{uploading} puis
+\texttt{importing}. Une image désactivée peut être réactivée ; une image supprimée passe par \texttt{pending\_delete}
+quand la suppression est différée.}
+\label{fig:gl-statuts}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Visibilité et partage}\label{sec:gl-partage}
+% ---------------------------------------------------------------------
+
+La visibilité fixe qui peut lire l'image et ses données (tableau~\ref{tab:gl-visibilite}) \parencite{glance-api-ref}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{2.4cm}>{\raggedright\arraybackslash}p{13.1cm}@{}}
+\toprule
+\textrm{\textbf{Visibilité}} & \textbf{Effet} \\
+\midrule
+private & Seul le propriétaire lit l'image ; elle figure dans sa liste. \\
+shared & Le propriétaire et les projets qu'il a ajoutés comme membres. \\
+public & Tout utilisateur peut lire l'image, et elle figure dans toutes les listes. \\
+community & Tout utilisateur peut la lire, mais elle ne figure que dans la liste du propriétaire : on la trouve en la cherchant. \\
+\bottomrule
+\end{tabular}
+\caption{Visibilité d'une image.}
+\label{tab:gl-visibilite}
+\end{table}
+
+Pour une image partagée, seul le propriétaire ajoute des membres. Le statut du nouveau membre est \texttt{pending} ;
+le membre l'accepte (\texttt{accepted}) ou la refuse (\texttt{rejected}). Par défaut, seules les images acceptées
+apparaissent dans sa liste \parencite{glance-api-guide}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack image set --shared ubuntu
+$ openstack image add project ubuntu PROJET_B        # côté propriétaire
+$ openstack image set --accept ubuntu                # côté projet B
+$ openstack image list --shared
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Ajouter une image : téléversement et import}\label{sec:gl-import}
+% ---------------------------------------------------------------------
+
+Le téléversement classique crée l'image puis envoie les données en une fois
+(\texttt{PUT /v2/images/\{id\}/file}). L'\emph{import interopérable} sépare les étapes : on crée l'image, on dépose les
+données dans une zone de transit (\emph{staging}) sur le nœud Glance, puis on déclenche l'import, qui les copie vers le
+store après d'éventuels traitements (figure~\ref{fig:gl-import}) \parencite{glance-import}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.6cm, text width=2.4cm] (a) at (0,0) {1. Créer\\ {\scriptsize\mdseries \texttt{POST /images}}\\ {\scriptsize\mdseries \texttt{queued}}};
+  \node[psvc, minimum width=2.6cm, text width=2.4cm] (b) at (4.2,0) {2. Déposer\\ {\scriptsize\mdseries \texttt{PUT /stage}}\\ {\scriptsize\mdseries \texttt{uploading}}};
+  \node[pgris, minimum width=2.6cm, text width=2.4cm] (c) at (8.4,0) {3. Traiter\\ {\scriptsize\mdseries plugins d'import}};
+  \node[pfoc, minimum width=2.6cm, text width=2.4cm] (d) at (12.6,0) {4. Importer\\ {\scriptsize\mdseries \texttt{POST /import}}\\ {\scriptsize\mdseries \texttt{active}}};
+  \draw[fluxo] (a) -- (b);
+  \draw[fluxo] (b) -- (c);
+  \draw[fluxo] (c) -- (d);
+  \node[callout, minimum width=14.6cm, text width=14.0cm] at (6.3,-1.8)
+    {Plugins : injection de propriétés, conversion de format (souvent vers \texttt{raw}), décompression (zip, gzip, lha).};
+\end{tikzpicture}}
+\caption{Import interopérable : création, dépôt dans la zone de transit, traitement, import dans le store. Les statuts
+\texttt{uploading} puis \texttt{importing} encadrent l'étape~4.}
+\label{fig:gl-import}
+\end{figure}
+
+Quatre méthodes d'import existent. Trois sont activées par défaut : \texttt{glance-direct}, \texttt{web-download}
+et \texttt{copy-image} \parencite{glance-config}. On les choisit avec l'option \texttt{enabled\_\allowbreak import\_\allowbreak methods} ;
+\texttt{glance-download} suppose un déploiement fédéré. L'exécuteur de tâches doit être \texttt{taskflow} (valeur
+par défaut), et la zone de transit se règle par \texttt{node\_staging\_uri}
+(par défaut \texttt{file:///tmp/staging/}) \parencite{glance-import} :
+
+\begin{itemize}
+  \item \texttt{glance-direct} : l'utilisateur envoie les données à Glance (étapes 1 à 4 ci-dessus) ;
+  \item \texttt{web-download} : Glance télécharge l'image depuis une URL et la copie dans le store ;
+  \item \texttt{glance-download} : copie depuis une autre région OpenStack qui partage le même Keystone ;
+  \item \texttt{copy-image} : copie une image existante vers d'autres stores d'un déploiement multi-stores.
+\end{itemize}
+
+Les plugins se règlent dans \texttt{glance-image-import.conf} (\texttt{image\_import\_plugins}) et s'exécutent dans l'ordre indiqué.
+Côté client, un téléversement classique avec des propriétés, puis une vérification :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack image create --file ubuntu.qcow2 --disk-format qcow2 \
+      --container-format bare --min-disk 8 --min-ram 1024 \
+      --property os_distro=ubuntu ubuntu
+$ openstack image show ubuntu -c status -c size -c disk_format
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Stockage : stores et multi-stores}\label{sec:gl-stores}
+% ---------------------------------------------------------------------
+
+Glance délègue le stockage des données à des \glspl{store}, accessibles par la bibliothèque \texttt{glance\_store}.
+Plusieurs peuvent coexister (\emph{multi-store}) : on les déclare dans \texttt{[DEFAULT] enabled\_backends} sous la forme
+\texttt{identifiant:type}, et \texttt{[glance\_store] default\_backend} désigne celui qui reçoit les images par défaut. Si
+cette valeur manque ou est invalide, \texttt{glance-api} ne démarre pas \parencite{glance-multistore}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{2.2cm}>{\raggedright\arraybackslash}p{13.3cm}@{}}
+\toprule
+\textrm{\textbf{Type}} & \textbf{Particularités} \\
+\midrule
+file & Système de fichiers du nœud (\texttt{filesystem\_store\_datadir}) : simple, local à un nœud. \\
+rbd & Ceph : stockage distribué, partagé entre nœuds Glance, Nova et Cinder. \\
+swift & Stockage objet : durable et extensible, adapté aux images nombreuses ou peu utilisées. \\
+cinder & Données dans des volumes Cinder. \\
+vmware & Datastore VMware. \\
+http & Lecture seule : référence une image à une URL. \\
+\bottomrule
+\end{tabular}
+\caption{Types de stores \parencite{glance-multistore}.}
+\label{tab:gl-stores}
+\end{table}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+[DEFAULT]
+enabled_backends = rapide:file, ceph:rbd, archive:swift
+[glance_store]
+default_backend = rapide
+[rapide]
+filesystem_store_datadir = /var/lib/glance/images/
+store_description = Disque local du nœud
+\end{lstlisting}
+\end{minipage}\par
+
+Deux stores de type \texttt{file} doivent avoir des \texttt{filesystem\_store\_datadir} différents, sinon des données sont
+perdues. Les stores préfixés \texttt{os\_glance\_} sont réservés au système. Pour viser un store à la création, on
+indique son identifiant (option \texttt{--store} du client \texttt{glance}).
+
+% ---------------------------------------------------------------------
+\subsection{Propriétés d'image et usage par Nova}\label{sec:gl-proprietes}
+% ---------------------------------------------------------------------
+
+Les propriétés d'une image (clés \texttt{hw\_*}, \texttt{os\_*}) décrivent le matériel et le système que Nova doit
+présenter à l'instance \parencite{glance-properties}. Elles se posent à la création ou après coup :
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{3.4cm}>{\raggedright\arraybackslash}p{12.1cm}@{}}
+\toprule
+\textrm{\textbf{Propriété}} & \textbf{Effet} \\
+\midrule
+hw\_disk\_bus, hw\_scsi\_model & Type de contrôleur de disque (\texttt{virtio}, \texttt{scsi}\dots). \\
+hw\_vif\_model & Modèle de carte réseau virtuelle (\texttt{virtio}, \texttt{e1000}\dots). \\
+hw\_firmware\_type & Firmware de démarrage : BIOS ou UEFI. \\
+os\_type, os\_distro & Type de système (\texttt{linux}, \texttt{windows}) et distribution. \\
+hw\_qemu\_\allowbreak guest\_agent & Active l'agent invité QEMU. \\
+hypervisor\_type, architecture & Hyperviseur et architecture processeur exigés. \\
+\bottomrule
+\end{tabular}
+\caption{Quelques propriétés d'image utiles \parencite{glance-properties}.}
+\label{tab:gl-proprietes}
+\end{table}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack image set ubuntu --property hw_disk_bus=virtio \
+      --property hw_firmware_type=uefi --property os_distro=ubuntu
+\end{lstlisting}
+\end{minipage}\par
+
+Au démarrage d'une instance, le nœud de calcul télécharge l'image depuis Glance, la garde dans un cache local, puis
+copie ou référence cette image de base (copie sur écriture) pour créer le disque racine. Les images de base inutilisées
+depuis plus d'un délai configuré, 24~heures par défaut, sont supprimées \parencite{nova-image-caching}. Un
+filtre de l'ordonnanceur de Nova (\texttt{ImagePropertiesFilter}) exploite les propriétés d'architecture et d'hyperviseur
+pour choisir l'hôte (chapitre~\ref{chap:nova}).
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre}\label{sec:gl-deploiement}
+% ---------------------------------------------------------------------
+
+Glance s'installe comme les autres services \parencite{glance-install} : une base \texttt{glance}, l'utilisateur et le
+service de type \texttt{image} dans Keystone (trois endpoints, port 9292), le paquet \texttt{glance}, la configuration de
+\texttt{glance-api.conf}, puis l'initialisation de la base.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/glance/glance-api.conf (extrait)
+[DEFAULT]
+enabled_backends = fs:file
+[database]
+connection = mysql+pymysql://glance:GLANCE_DBPASS@controller/glance
+[keystone_authtoken]
+# auth_url, auth_type, username, password : le compte de service glance
+[paste_deploy]
+flavor = keystone
+[glance_store]
+default_backend = fs
+[fs]
+filesystem_store_datadir = /var/lib/glance/images/
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# su -s /bin/sh -c "glance-manage db_sync" glance
+# systemctl restart glance-api
+$ openstack image list
+\end{lstlisting}
+\end{minipage}\par
+
+L'installation propose aussi des quotas par projet, enregistrés dans Keystone (limites unifiées) et activés par
+\texttt{use\_keystone\_limits = True}, avec une section \texttt{[oslo\_limit]} dans la configuration. Les pannes les plus courantes sont résumées
+dans le tableau~\ref{tab:gl-pannes}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Image bloquée en \texttt{queued} & Les données n'ont pas été envoyées ou importées. & \texttt{openstack image show} ; journal de \texttt{glance-api} \\
+Image en \texttt{killed} & Erreur pendant l'envoi : espace disque, store injoignable. & Journal de \texttt{glance-api} ; espace du store \\
+L'instance échoue : image introuvable ou refusée & Image non \texttt{active}, ou visibilité insuffisante. & \texttt{openstack image list} dans le projet de l'utilisateur \\
+Démarrage impossible (disque trop petit) & \texttt{min\_disk} ou \texttt{min\_ram} supérieurs au gabarit. & Comparer l'image et le gabarit \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Glance.}
+\label{tab:gl-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:gl-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Choisir format et visibilité}\label{ex:gl-formats}
+Une équipe veut publier (a)~une image Ubuntu pour toute la plateforme, (b)~une image de travail visible de deux projets
+seulement, (c)~une image ancienne qu'on veut garder trouvable mais hors des listes habituelles. Le cloud utilise KVM,
+et les disques des instances sont sur Ceph. Donner pour chacune la visibilité, et les formats à privilégier.
+\end{exercice}
+\begin{correction}
+(a)~\texttt{public}. (b)~\texttt{shared} : le propriétaire ajoute les deux projets comme membres, qui doivent accepter.
+(c)~\texttt{community} : lisible par tous mais absente des listes des autres projets. Pour KVM, disque \texttt{qcow2} et conteneur
+\texttt{bare} ; avec Ceph, \texttt{raw} est préférable, ce qu'on obtient en convertissant à l'import (plugin de conversion) ou
+avant le dépôt.
+\end{correction}
+
+\begin{exercice}{Suivre les statuts}\label{ex:gl-statuts}
+Donner la suite des statuts d'une image (a)~téléversée directement ; (b)~importée par \texttt{glance-direct} ; (c)~dont l'envoi
+échoue en cours de route. Que devient une image qu'on désactive ?
+\end{exercice}
+\begin{correction}
+(a)~\texttt{queued}, \texttt{saving}, \texttt{active}. (b)~\texttt{queued}, \texttt{uploading} (après \texttt{stage}), \texttt{importing}, puis
+\texttt{active}. (c)~\texttt{queued}, \texttt{saving}, \texttt{killed} : les données sont illisibles. Une image désactivée reste
+enregistrée, mais ses données ne peuvent plus être lues par les non-administrateurs ; on la rend de nouveau utilisable
+en la réactivant.
+\end{correction}
+
+\begin{exercice}{Diagnostiquer}\label{ex:gl-diag}
+Une instance ne démarre pas à partir de l'image \texttt{debian} que vient de partager un autre projet. Quelles vérifications
+faire, dans l'ordre ?
+\end{exercice}
+\begin{correction}
+1.~L'image est-elle \texttt{active} ? 2.~Est-elle \texttt{shared} et le projet est-il membre ? Le statut du membre doit être
+\texttt{accepted} : sinon l'image n'apparaît pas dans sa liste (\texttt{openstack image set --accept}). 3.~Le gabarit est-il assez
+grand pour \texttt{min\_disk} et \texttt{min\_ram} ? 4.~Les propriétés (architecture, hyperviseur) correspondent-elles aux hôtes ?
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:gl-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Glance enregistre et distribue les images ; il sépare les métadonnées (base) des données (store). Il ne
+        démarre pas de machines.
+  \item Le format de disque (\texttt{qcow2}, \texttt{raw}\dots) et le format de conteneur (\texttt{bare} en général) décrivent le
+        fichier ; avec Ceph, \texttt{raw} est préférable.
+  \item Les statuts vont de \texttt{queued} à \texttt{active} (par \texttt{saving}, ou \texttt{uploading} puis \texttt{importing}) ; seule une
+        image \texttt{active} sert à créer une instance.
+  \item Quatre visibilités : \texttt{private}, \texttt{shared} (membres acceptés), \texttt{public} et \texttt{community}.
+  \item L'import interopérable passe par une zone de transit, des plugins (propriétés, conversion, décompression) et une
+        méthode (\texttt{glance-direct}, \texttt{web-download}, \texttt{glance-download}, \texttt{copy-image}).
+  \item Les stores se déclarent dans \texttt{enabled\_backends} ; \texttt{default\_backend} est obligatoire.
+  \item Les propriétés \texttt{hw\_*} et \texttt{os\_*} configurent le matériel présenté à l'instance ; Nova garde un cache
+        des images de base sur les nœuds de calcul.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{9.9cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Ajouter une image & \texttt{openstack image create --file F --disk-format qcow2 --container-format bare N} & \ref{sec:gl-import} \\
+Voir une image & \texttt{openstack image show N} & \ref{sec:gl-concepts} \\
+Régler les propriétés & \texttt{openstack image set N --property hw\_disk\_bus=virtio} & \ref{sec:gl-proprietes} \\
+Partager (propriétaire) & \texttt{openstack image add project N P} & \ref{sec:gl-partage} \\
+Accepter un partage & \texttt{openstack image set --accept N} & \ref{sec:gl-partage} \\
+Initialiser Glance & \texttt{glance-manage db\_sync} & \ref{sec:gl-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Choisir formats et visibilité d'une image selon l'usage (exercice~\ref{ex:gl-formats}).
+  \item Suivre les statuts d'une image jusqu'à son activation (exercice~\ref{ex:gl-statuts}).
+  \item Diagnostiquer une image inutilisable, notamment partagée (exercice~\ref{ex:gl-diag}).
+\end{itemize}
+\end{savoirfaire}
