@@ -2,10 +2,923 @@
 %  Chapitre « Méthodes de déploiement d'OpenStack »
 %  Fichier importé par main.tex avec \include{chap_deploiement}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Méthodes de déploiement » (chapitre 4) et documentation
+%  officielle de DevStack, Kolla, Kolla-Ansible, OpenStack-Ansible, OpenStack-Helm,
+%  du guide d'installation, des guides de haute disponibilité et de mise à niveau
+%  (voir sources.bib). Versions décrites : celles de la documentation en vigueur
+%  début octobre 2026 (version 2026.2 « Hibiscus » sortie le 30 septembre 2026).
+%  Écarts avec le support : TripleO est retiré du projet (dépôt archivé en 2024) ;
+%  Kolla-Ansible ne déploie plus Swift et ne déploie pas Ceph ; les images publiées par
+%  Kolla ne sont pas destinées à la production ; la documentation de Kolla-Ansible ne
+%  décrit pas de retour arrière après une mise à niveau.
+%  Chapitre détaillé : 15 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Méthodes de déploiement d'OpenStack}\label{chap:deploiement}
+% =====================================================================
+
+Les chapitres précédents ont présenté chaque service du point de vue de l'utilisateur, puis de son architecture. Celui-ci se place
+du point de vue de l'administrateur, qui doit installer la plateforme et la faire vivre. Il explique pourquoi ce travail est délicat,
+décrit ce que tout déploiement assemble, présente les outils les plus répandus (DevStack, Kolla-Ansible, OpenStack-Ansible,
+installation manuelle, approches fondées sur Kubernetes), aide à choisir, puis termine par l'exploitation d'un cloud installé :
+haute disponibilité, sécurité, mises à niveau.
+
+% ---------------------------------------------------------------------
+\subsection{Pourquoi déployer OpenStack est délicat}\label{sec:dep-pourquoi}
+% ---------------------------------------------------------------------
+
+OpenStack n'est pas un logiciel unique mais une constellation de services (chapitres~\ref{chap:keystone} à~\ref{chap:trove}) :
+chacun a son code, ses processus, son fichier de configuration et, le plus souvent, sa propre base de données. Tous reposent sur la
+même infrastructure : une base SQL, une file de messages et un cache (\gls{memcached}) \parencite{install-env}. Un cloud réel
+s'étend de plus sur plusieurs machines aux rôles différents, dont les versions doivent rester cohérentes entre elles. Tout installer,
+configurer et mettre à jour à la main devient vite ingérable au-delà de quelques nœuds : c'est ce que les outils de déploiement
+automatisent (figure~\ref{fig:dep-pile}).
+
+\begin{definition}{Outil de déploiement}
+Logiciel qui installe, configure et relie les services d'un cloud sur un ensemble de machines à partir d'une description
+(inventaire, fichier de variables, modèles), de façon reproductible ; la plupart savent aussi le mettre à jour.
+\end{definition}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=9.6cm] (u) at (5.0,7.0) {Utilisateurs \ $\cdot$ \ ligne de commande \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=9.6cm, minimum height=1.0cm] (s) at (5.0,5.4)
+    {Services OpenStack\\ {\scriptsize\mdseries Keystone, Nova, Neutron, Glance, Cinder, Octavia, Heat\dots}};
+  \node[psvc, minimum width=9.6cm, minimum height=1.0cm] (i) at (5.0,3.8)
+    {Services d'infrastructure partagés\\ {\scriptsize\mdseries MariaDB \ $\cdot$ \ RabbitMQ \ $\cdot$ \ memcached \ $\cdot$ \ HAProxy}};
+  \node[pgris, minimum width=9.6cm, minimum height=1.0cm] (e) at (5.0,2.2)
+    {Mode d'exécution\\ {\scriptsize\mdseries paquets \ $\cdot$ \ environnements Python \ $\cdot$ \ conteneurs \ $\cdot$ \ Kubernetes}};
+  \node[pgris, minimum width=9.6cm, minimum height=1.0cm] (m) at (5.0,0.6)
+    {Machines et réseaux\\ {\scriptsize\mdseries contrôleurs, calcul, stockage ; réseaux de gestion, de tunnel et externe}};
+  \node[draw=insarouge, thick, rounded corners=4pt, fill=insarouge!8, minimum width=1.7cm, minimum height=6.0cm] (o) at (11.9,3.0) {};
+  \node[rotate=90, font=\footnotesize\bfseries, text=insarouge] at (11.9,3.0) {Outil de déploiement};
+  \foreach \b in {s,i,e,m} \draw[fluxr] (o.west |- \b.east) -- (\b.east);
+  \node[callout, minimum width=13.2cm] at (6.3,-1.0)
+    {L'outil de déploiement automatise toute la pile, pas seulement l'installation des services.};
+\end{tikzpicture}}
+\caption{Ce qu'un déploiement doit assembler. Les services (chapitres~\ref{chap:keystone} à~\ref{chap:trove}) reposent sur une
+infrastructure partagée, installée sur des machines selon un mode d'exécution au choix ; l'outil de déploiement prend en charge
+les quatre étages.}
+\label{fig:dep-pile}
+\end{figure}
+
+Avant d'installer quoi que ce soit, il faut trancher les questions du tableau~\ref{tab:dep-decisions}. La version compte
+autant que l'outil : OpenStack publie une version tous les six mois, la plus récente (2026.2 \emph{Hibiscus}) est sortie le
+30~septembre 2026 et 2027.1 \emph{Indri} est en développement \parencite{openstack-releases}. Les outils sont eux-mêmes
+versionnés par série, et l'on installe la branche de l'outil qui correspond à la version visée \parencite{kolla-ansible-operating}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{6.3cm}>{\raggedright\arraybackslash}p{6.1cm}@{}}
+\toprule
+\textbf{Décision} & \textbf{Question à trancher} & \textbf{Exemples de réponses} \\
+\midrule
+Topologie & Quels rôles, sur combien de nœuds ? & Un nœud pour l'essai ; trois contrôleurs pour la production. \\
+Réseaux & Quelles interfaces pour la gestion, les tunnels, l'accès externe ? & Une interface par réseau, ou des VLAN sur un lien. \\
+Stockage & Où vivent les volumes, les images, les objets ? & Disques locaux (LVM), cluster Ceph, NFS. \\
+Mode d'installation & Paquets, sources, conteneurs ou Kubernetes ? & Voir le tableau~\ref{tab:dep-outils}. \\
+Version & Quelle version, à quel rythme la mettre à niveau ? & Toutes les versions (six mois) ou une sur deux (\gls{slurp}). \\
+Exploitation & Haute disponibilité, TLS, secrets, sauvegardes, supervision ? & Section~\ref{sec:dep-exploitation}. \\
+\bottomrule
+\end{tabular}
+\caption{Les décisions à prendre avant de déployer.}
+\label{tab:dep-decisions}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Anatomie d'un déploiement}\label{sec:dep-anatomie}
+% ---------------------------------------------------------------------
+
+Quelle que soit la méthode, on retrouve les mêmes rôles de nœuds, les mêmes services d'infrastructure et les mêmes réseaux
+(figure~\ref{fig:dep-topo}).
+
+\begin{itemize}
+  \item \textbf{Hôte de déploiement} : la machine d'où l'on lance l'outil (\gls{ansible}, le plus souvent) ; en production, une machine
+        distincte du cloud \parencite{osa-deploy-host,kolla-ansible-production}.
+  \item \textbf{Contrôleurs} : API des services, ordonnanceurs, base de données et file de messages ; un nombre impair, pour
+        établir un quorum \parencite{kolla-ansible-production}.
+  \item \textbf{Réseau} : agents Neutron, routeurs ; avec Kolla-Ansible, HAProxy et keepalived s'y exécutent aussi
+        \parencite{kolla-ansible-production}.
+  \item \textbf{Calcul} : hyperviseur et \texttt{nova-compute}, là où vivent les machines virtuelles.
+  \item \textbf{Stockage} : \texttt{cinder-volume} et ses disques ; les volumes peuvent aussi résider sur un cluster \gls{ceph} externe.
+\end{itemize}
+
+Le guide d'installation décrit une architecture minimale : un contrôleur, qui exécute l'identité, les images, Placement, les parties
+de gestion de Nova et de Neutron, des agents réseau et le tableau de bord, et un nœud de calcul, avec en option des nœuds de stockage
+bloc et objet. Il précise qu'elle n'est pas destinée à la production : les agents réseau y résident sur le contrôleur et le trafic
+des tunnels emprunte le réseau de gestion \parencite{install-overview}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    nd/.style={draw=insaorange, fill=insapeche, thick, rounded corners=3pt, text width=3.3cm, align=center,
+               inner sep=4pt, minimum height=2.3cm}]
+  \node[pcli, minimum width=5.2cm] (dh) at (8.4,3.5) {Hôte de déploiement\\ {\scriptsize\mdseries Ansible, inventaire, variables}};
+  \node[nd] (c) at (1.8,0)  {\textbf{Contrôleurs} {\scriptsize$\times 3$}\\[2pt] {\scriptsize API des services, ordonnanceurs, MariaDB, RabbitMQ, memcached}};
+  \node[nd] (r) at (6.0,0)  {\textbf{Réseau}\\[2pt] {\scriptsize agents Neutron, routeurs, HAProxy et keepalived}};
+  \node[nd] (k) at (10.2,0) {\textbf{Calcul} {\scriptsize$\times N$}\\[2pt] {\scriptsize hyperviseur, \texttt{nova-compute}, agent du réseau virtuel}};
+  \node[nd] (s) at (14.4,0) {\textbf{Stockage}\\[2pt] {\scriptsize \texttt{cinder-volume}, disques locaux ou accès à Ceph}};
+  \foreach \n in {c,r,k,s} \draw[fluxd] (dh.south) -- ++(0,-0.4) -| (\n.north);
+  \node[etiqf] at (4.6,2.775) {Ansible, par SSH};
+  % réseaux
+  \foreach \y/\col/\tc/\nom in {-2.5/insarouge/insarouge/Gestion, -3.3/insaorange/insaorange/Tunnel,
+      -4.1/insarouge!45/insarouge/Stockage, -4.9/insagris/insagris/Externe}
+    { \draw[line width=2pt, \col] (0.2,\y) -- (16.1,\y);
+      \node[anchor=east, font=\scriptsize\bfseries, text=\tc] at (-0.1,\y) {\nom}; }
+  % branchements : décalage selon le réseau
+  \foreach \cx/\y/\off/\col in {
+      1.8/-2.5/-1.2/insarouge, 1.8/-4.9/1.2/insagris,
+      6.0/-2.5/-1.2/insarouge, 6.0/-3.3/-0.4/insaorange, 6.0/-4.9/1.2/insagris,
+      10.2/-2.5/-1.2/insarouge, 10.2/-3.3/-0.4/insaorange, 10.2/-4.1/0.4/insarouge!45,
+      14.4/-2.5/-1.2/insarouge, 14.4/-4.1/0.4/insarouge!45}
+    { \draw[thick, \col] ({\cx+\off},-1.15) -- ({\cx+\off},\y);
+      \fill[\col] ({\cx+\off},\y) circle (2.6pt); }
+  \node[callout, minimum width=15.2cm] at (8.2,-5.9)
+    {Un même nœud peut tenir plusieurs rôles : l'inventaire de l'outil les décrit, le logiciel ne les fige pas.};
+\end{tikzpicture}}
+\caption{Topologie d'un déploiement multi-nœuds. L'hôte de déploiement configure les nœuds par SSH (pointillés) ; chaque rôle se
+branche (points) sur les réseaux dont il a besoin.}
+\label{fig:dep-topo}
+\end{figure}
+
+Les services d'infrastructure demandent une attention particulière. La base de données est le plus souvent un cluster MariaDB avec
+\gls{galera} (multimaître), la file de messages un cluster \gls{rabbitmq}, et \gls{haproxy} répartit les requêtes des API vers les contrôleurs
+\parencite{osa-service-arch}. Ces composants à état imposent un \gls{quorum} : deux instances n'apportent aucune haute
+disponibilité (la panne de l'une paralyse l'autre), trois en tolèrent une en panne, cinq en tolèrent deux, et au-delà le gain
+disparaît \parencite{kolla-ansible-production}. L'horloge de tous les nœuds doit en outre être synchronisée (\gls{ntp})
+\parencite{install-env}.
+
+Les réseaux se séparent par leur rôle (tableau~\ref{tab:dep-reseaux}) ; le trafic de gestion, qui porte les mots de passe et les
+messages entre services, doit rester interne \parencite{kolla-ansible-production}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.4cm}>{\raggedright\arraybackslash}p{7.6cm}>{\raggedright\arraybackslash}p{5.5cm}@{}}
+\toprule
+\textbf{Réseau} & \textbf{Rôle} & \textbf{Variable Kolla-Ansible} \\
+\midrule
+Gestion & Dialogue des services entre eux, avec la base et la file ; à garder interne. & \texttt{api\_\allowbreak interface} (défaut : \texttt{network\_\allowbreak interface}) \\
+Tunnel & Trafic des réseaux de projets encapsulé (VXLAN, Geneve). & \texttt{tunnel\_\allowbreak interface} \\
+Externe & Réseaux externes et adresses flottantes ; l'interface porte \texttt{br-ex} et n'a pas d'adresse IP. & \texttt{neutron\_\allowbreak external\_\allowbreak interface} \\
+API publique & Points d'accès exposés aux utilisateurs derrière HAProxy. & \texttt{kolla\_\allowbreak external\_\allowbreak vip\_\allowbreak interface} \\
+\bottomrule
+\end{tabular}
+\caption{Les réseaux d'un déploiement et leurs interfaces dans Kolla-Ansible \parencite{kolla-ansible-production}.}
+\label{tab:dep-reseaux}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Panorama des méthodes}\label{sec:dep-panorama}
+% ---------------------------------------------------------------------
+
+Les outils se distinguent d'abord par la manière dont ils installent les services (figure~\ref{fig:dep-carte}), puis par leur public
+(tableau~\ref{tab:dep-outils}). Aucun n'est « le meilleur » : chacun répond à un contexte.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \foreach \x/\t in {1.9/{Paquets de la\\ distribution}, 6.3/{Sources Git}, 10.7/{Images de\\ conteneurs}, 15.1/{Kubernetes}}
+    \node[pgris, minimum width=3.9cm, minimum height=1.0cm] at (\x,4.6) {\t};
+  \node[pdat, minimum width=3.7cm]  at (1.9,3.1)  {Installation manuelle};
+  \node[pdat, minimum width=3.7cm]  at (1.9,2.2)  {Packstack (RDO)};
+  \node[pdat, minimum width=3.7cm]  at (6.3,3.1)  {DevStack};
+  \node[psvc, minimum width=3.7cm]  at (6.3,2.2)  {OpenStack-Ansible};
+  \node[psvc, minimum width=3.7cm]  at (10.7,3.1) {Kolla-Ansible};
+  \node[psvc, minimum width=3.7cm]  at (10.7,2.2) {Kayobe};
+  \node[psvc, minimum width=3.7cm]  at (15.1,3.1) {OpenStack-Helm};
+  \node[psvc, minimum width=3.7cm]  at (15.1,2.2) {Sunbeam (Canonical)};
+  \node[psvc, minimum width=3.7cm]  at (15.1,1.3) {RHOSO (Red Hat)};
+  \node[pdat, minimum width=0.5cm, inner xsep=4pt] at (3.2,0.0) {};
+  \node[anchor=west] at (3.55,0.0) {essai, apprentissage, développement};
+  \node[psvc, minimum width=0.5cm, inner xsep=4pt] at (9.4,0.0) {};
+  \node[anchor=west] at (9.75,0.0) {production};
+  \node[callout, minimum width=16.4cm] at (8.5,-1.2)
+    {Ce qui change d'un outil à l'autre n'est pas la liste des services, mais la façon dont ils sont installés et mis à jour.};
+\end{tikzpicture}}
+\caption{Les outils de déploiement selon le mode d'installation des services. OpenStack-Ansible installe depuis les sources par
+défaut (paquets possibles pour certains services) et peut isoler les services dans des conteneurs LXC \parencite{osa-config}.}
+\label{fig:dep-carte}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{5.5cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{3.8cm}@{}}
+\toprule
+\textbf{Outil} & \textbf{Principe} & \textbf{Usage visé} & \textbf{Ressources minimales documentées} \\
+\midrule
+Installation manuelle & Paquets de la distribution, guide d'installation officiel, service par service & Apprentissage, environnement isolé & Contrôleur : 4~Go ; calcul : 2~Go (preuve de concept) \parencite{install-env} \\
+\gls{packstack} & Installeur du projet RDO (CentOS Stream) ; haute disponibilité et mises à niveau hors périmètre & Preuve de concept & 16~Go de mémoire \parencite{packstack} \\
+DevStack & Scripts shell, installation depuis les sources Git & Développement, tests, démonstration & Machine dédiée (non précisé) \parencite{devstack-index} \\
+OpenStack-Ansible & Ansible ; sources dans des environnements virtuels Python, conteneurs LXC & Production & Test (AIO) : 8~vCPU, 8~Go, 50~Go \parencite{osa-aio} \\
+Kolla-Ansible & Ansible ; images de conteneurs Docker ou Podman & Production, évaluation & 2~interfaces, 8~Go, 40~Go \parencite{kolla-ansible-quickstart} \\
+Kayobe & Kolla-Ansible, plus configuration des hôtes et provisionnement du matériel (Bifrost) & Production, depuis le serveur nu & --- \parencite{kayobe-index} \\
+OpenStack-Helm & Charts Helm sur Kubernetes & Cloud sur Kubernetes & Kubernetes 1.33 à 1.35 \parencite{helm-readme} \\
+Sunbeam & Snap, Juju, Kubernetes (Canonical OpenStack) \parencite{sunbeam-multinode} & Petits clouds, de un à plusieurs nœuds & Un nœud : 4~cœurs, 16~Gio, 100~Gio \parencite{sunbeam-tuto} \\
+RHOSO & Opérateurs sur OpenShift (Red Hat) & Clients de Red Hat & --- \parencite{rhoso-deploy} \\
+TripleO & Retiré du projet (dépôt archivé en 2024) & --- & --- \parencite{tripleo-docs} \\
+\bottomrule
+\end{tabular}
+\caption{Les principaux outils de déploiement d'OpenStack.}
+\label{tab:dep-outils}
+\end{table}
+
+TripleO (« OpenStack sur OpenStack » : un cloud d'administration, l'\emph{undercloud}, déployait le cloud de production,
+l'\emph{overcloud}) figure encore dans de nombreux supports ; il n'est plus maintenu. Red Hat, qui en tirait son outil
+\emph{director}, déploie aujourd'hui son offre par des opérateurs sur OpenShift (RHOSO) \parencite{tripleo-docs,rhoso-deploy}. La suite
+détaille DevStack (section~\ref{sec:dep-devstack}), Kolla-Ansible (section~\ref{sec:dep-kolla}) et OpenStack-Ansible
+(section~\ref{sec:dep-osa}), revient sur l'installation manuelle (section~\ref{sec:dep-manuel}) pour comprendre ce que les outils
+automatisent, situe les approches fondées sur Kubernetes (section~\ref{sec:dep-autres}), puis aide à choisir
+(section~\ref{sec:dep-choix}) et à exploiter (section~\ref{sec:dep-exploitation}).
+
+% ---------------------------------------------------------------------
+\subsection{DevStack : l'environnement tout-en-un}\label{sec:dep-devstack}
+% ---------------------------------------------------------------------
+
+\begin{definition}{DevStack}
+Série de scripts qui déploient rapidement un cloud OpenStack complet sur une seule machine, à partir des dépôts Git de chaque projet
+\parencite{devstack-index}.
+\end{definition}
+
+\gls{devstack} sert à construire vite des environnements de développement, à décrire des configurations qui fonctionnent, à faciliter les
+contributions et à fournir l'environnement des tests d'intégration de chaque modification proposée \parencite{devstack-source}. Il
+installe depuis les sources, sur la branche \texttt{master} par défaut ou sur une branche \texttt{stable/<série>} pour une version plus
+ancienne : c'est ce qui en fait l'outil idéal pour essayer une modification de code (dans Nova, par exemple) avant de la proposer. Il
+demande une machine dédiée et jetable. Ubuntu 24.04 est la plus testée ; le projet suit aussi les deux dernières versions LTS
+d'Ubuntu, Rocky Linux 9 et openEuler. L'installation dure de 15 à 30 minutes \parencite{devstack-index}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=3.6cm] (lc) at (1.9,2.4) {\texttt{local.conf}\\ {\scriptsize\mdseries mots de passe, services}};
+  \node[pgris, minimum width=3.6cm] (git) at (1.9,0.3) {Dépôts Git des projets\\ {\scriptsize\mdseries opendev.org}};
+  \node[pfoc, minimum width=2.6cm, minimum height=1.3cm] (st) at (7.4,1.35) {\texttt{stack.sh}};
+  \node[pgris, minimum width=5.6cm] (pk) at (13.0,2.8) {Paquets de la distribution\\ {\scriptsize\mdseries MySQL, RabbitMQ, Apache}};
+  \node[psvc, minimum width=5.6cm] (sv) at (13.0,1.35) {Services installés dans \texttt{/opt/stack}\\ {\scriptsize\mdseries fichiers de configuration, bases}};
+  \node[psvc, minimum width=5.6cm] (sd) at (13.0,-0.1) {Unités systemd \texttt{devstack@service}};
+  \node[pdat, minimum width=9.4cm] (cl) at (9.4,-1.9) {Cloud à un nœud : API, Horizon, fichier \texttt{openrc}};
+  \draw[fluxr] (lc.east) -| (st.north) node[num, pos=0.25] {1};
+  \draw[fluxr] (git.east) -| (st.south) node[num, pos=0.25] {2};
+  \foreach \t in {pk,sv,sd} \draw[fluxo] (st.east) -- (\t.west);
+  \node[num] at (9.7,1.35) {3};
+  \draw[fluxo] (sd.south) -- (sd.south |- cl.north);
+  \node[callout, minimum width=15.6cm] at (8.5,-3.3)
+    {DevStack installe depuis les sources, sur une machine dédiée : pour apprendre et développer, pas pour héberger un service réel.};
+\end{tikzpicture}}
+\caption{Ce que fait \texttt{stack.sh}. Il lit \texttt{local.conf} (1) et les dépôts des projets (2), puis installe les paquets de la
+distribution, installe et configure les services dans \texttt{/opt/stack} et les démarre comme unités systemd (3).}
+\label{fig:dep-devstack}
+\end{figure}
+
+Le script \texttt{stack.sh} ne doit pas être lancé en tant que \texttt{root} : il s'exécute sous un compte dédié, \texttt{stack}, qui
+dispose de \texttt{sudo} sans mot de passe \parencite{devstack-index}. Ses services de base (Keystone, Nova, Placement, Glance,
+Cinder, Neutron avec OVN et Horizon) sont actifs par défaut ; les autres s'ajoutent avec \texttt{enable\_service} (c'est le cas de Swift)
+ou, pour un projet qui n'est pas dans le dépôt de DevStack, avec \texttt{enable\_plugin} \parencite{devstack-source,devstack-config,devstack-plugins}.
+Chaque service tourne en unité systemd, dont on lit le journal avec \texttt{journalctl} \parencite{devstack-systemd}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ sudo useradd -s /bin/bash -d /opt/stack -m stack
+$ sudo chmod +x /opt/stack
+$ echo "stack ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/stack
+$ sudo -u stack -i
+$ git clone https://opendev.org/openstack/devstack
+$ cd devstack && nano local.conf
+$ ./stack.sh
+$ sudo journalctl -f --unit devstack@n-cpu.service
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+[[local|localrc]]
+ADMIN_PASSWORD=secret
+DATABASE_PASSWORD=$ADMIN_PASSWORD
+RABBIT_PASSWORD=$ADMIN_PASSWORD
+SERVICE_PASSWORD=$ADMIN_PASSWORD
+HOST_IP=192.168.1.10
+# ajouter un projet absent des services par défaut (ici Heat)
+enable_plugin heat https://opendev.org/openstack/heat
+# retirer un service dont on n'a pas besoin
+disable_service horizon
+\end{lstlisting}
+\end{minipage}\par
+
+Le fichier \texttt{local.conf} est le seul à personnaliser : il suit un format de type INI dont la section \texttt{[[local|localrc]]}
+fixe les mots de passe (des caractères alphanumériques seulement), l'adresse de l'hôte, les services actifs, et même les dépôts et
+les branches à cloner (\texttt{NOVA\_REPO}, \texttt{NOVA\_BRANCH}) \parencite{devstack-config}. Une fois le script terminé, on charge les
+identifiants avec \texttt{. openrc} puis on utilise la ligne de commande \parencite{devstack-source}.
+
+Pour plusieurs machines, le contrôleur reçoit un \texttt{local.conf} complet et chaque nœud de calcul un fichier réduit, qui
+désigne le contrôleur (\texttt{SERVICE\_HOST}, \texttt{MYSQL\_HOST}, \texttt{RABBIT\_HOST}) et ne garde que des services
+comme \texttt{n-cpu}. Il faut ensuite associer chaque nouvel hôte à la cellule, depuis le contrôleur, avec
+\texttt{tools/discover\_hosts.sh} (section~\ref{sec:nova-archi}) \parencite{devstack-multinode}.
+
+DevStack n'est pas un installateur généraliste : la plupart des combinaisons d'options sont rarement testées, et il modifie en
+profondeur le système hôte \parencite{devstack-overview,devstack-source}. Conçu pour un nœud, il n'offre pas de haute disponibilité.
+\texttt{./unstack.sh} arrête les services (en laissant MySQL et RabbitMQ), \texttt{./clean.sh} efface les données.
+
+% ---------------------------------------------------------------------
+\subsection{Kolla-Ansible : OpenStack en conteneurs}\label{sec:dep-kolla}
+% ---------------------------------------------------------------------
+
+Le projet \gls{kolla} a pour mission de fournir des outils qui créent des conteneurs prêts pour la production et des outils qui déploient
+des clouds OpenStack \parencite{kolla-source}. Il faut distinguer ses livrables :
+
+\begin{itemize}
+  \item \textbf{Kolla} construit les images de conteneurs de chaque service (\texttt{kolla-build}) ;
+  \item \textbf{Kolla-Ansible} fournit les playbooks Ansible qui déploient ces images sur les nœuds ;
+  \item \textbf{\gls{kayobe}} ajoute la configuration des hôtes et le provisionnement du matériel (avec Bifrost, qui s'appuie sur
+        Ironic) à Kolla-Ansible \parencite{kayobe-index}.
+\end{itemize}
+
+\gls{kollaansible} fonctionne avec Docker ou Podman. Il prend en charge comme hôtes Debian 13, Rocky Linux 10 et Ubuntu 24.04, et les
+images existent dans les mêmes trois distributions (\texttt{kolla\_base\_distro}) \parencite{kolla-ansible-support}. Par défaut il
+tire les images publiées sur Quay.io (espace \texttt{openstack.kolla}). Ses auteurs avertissent que ces images, destinées aux
+essais et aux démonstrations, ne subissent aucun examen de sécurité : en production, on construit et on maintient son propre jeu
+d'images avec \texttt{kolla-build}, que l'on place dans un \gls{registre} local (recommandé dès que le déploiement compte plusieurs nœuds)
+\parencite{kolla-source,kolla-image-building,kolla-ansible-multinode}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    ct/.style={draw=insaorange, fill=insapeche, rounded corners=2pt, font=\scriptsize\ttfamily, minimum height=0.55cm, inner xsep=3pt}]
+  \node[pcli, minimum width=7.2cm] (dh) at (3.9,7.1)
+    {Hôte de déploiement\\ {\scriptsize\mdseries \texttt{kolla-ansible}, inventaire, \texttt{globals.yml}, \texttt{passwords.yml}}};
+  \node[pgris, minimum width=5.6cm] (reg) at (12.2,7.1) {Registre d'images\\ {\scriptsize\mdseries Quay.io ou registre local}};
+  \foreach \y/\nom in {5.0/{Contrôleurs $\times 3$}, 3.6/{Réseau}, 2.2/{Calcul}, 0.8/{Stockage}}
+    { \draw[draw=insagris, dashed, rounded corners=3pt, fill=insagris!5] (0,{\y-0.58}) rectangle (15.7,{\y+0.58});
+      \node[anchor=west, font=\footnotesize\bfseries] at (0.15,\y) {\nom}; }
+  \foreach \x/\t in {3.9/keystone, 5.9/nova\_api, 8.5/neutron\_server, 10.9/horizon, 12.7/mariadb, 14.5/rabbitmq}
+    \node[ct] at (\x,5.0) {\t};
+  \foreach \x/\t in {3.9/haproxy, 6.0/keepalived, 8.9/neutron\_l3\_agent, 12.1/neutron\_dhcp\_agent}
+    \node[ct] at (\x,3.6) {\t};
+  \foreach \x/\t in {4.2/nova\_compute, 6.8/nova\_libvirt, 10.0/openvswitch\_vswitchd}
+    \node[ct] at (\x,2.2) {\t};
+  \node[ct] at (4.2,0.8) {cinder\_volume};
+  \node[pcli, minimum width=1.0cm, inner xsep=4pt] (vip) at (14.8,3.6) {VIP};
+  \node[pgris, dashed, minimum width=3.8cm] (ceph) at (11.8,0.8) {Ceph (externe)};
+  \draw[fluxd] (6.0,0.8) -- (ceph.west);
+  \draw[fluxd] (dh.south) -- (3.9,5.65) node[etiqf, midway, right=3pt] {Ansible, par SSH};
+  \draw[fluxo] (reg.south) -- (12.2,5.65) node[etiqf, midway, right=3pt] {tirer les images};
+  \node[callout, minimum width=15.4cm] at (7.85,-0.75)
+    {Chaque service tourne dans son conteneur, avec ses dépendances figées dans l'image : pas de conflit de versions entre services.};
+\end{tikzpicture}}
+\caption{Kolla-Ansible sur plusieurs nœuds. L'hôte de déploiement pilote les nœuds par Ansible (pointillés) ; ceux-ci tirent leurs
+images d'un registre. Les groupes de l'inventaire fixent les conteneurs de chaque nœud. HAProxy et keepalived, qui portent
+l'adresse virtuelle (VIP), s'exécutent par défaut sur les nœuds réseau. Kolla-Ansible ne déploie pas Ceph : il s'y connecte.}
+\label{fig:dep-kolla}
+\end{figure}
+
+La configuration tient en trois éléments, placés sur l'hôte de déploiement, qu'installe \texttt{pip} dans un environnement virtuel
+\parencite{kolla-ansible-quickstart} :
+\begin{itemize}
+  \item l'\textbf{\gls{inventaireansible}} Ansible, qui affecte les machines aux groupes \texttt{control}, \texttt{network}, \texttt{compute},
+        \texttt{monitoring} et \texttt{storage} (le groupe \texttt{control} compte un nombre impair de nœuds) ; chaque service a lui-même
+        son groupe, mais en modifier la répartition peut casser le déploiement \parencite{kolla-ansible-multinode,kolla-ansible-production} ;
+  \item \texttt{/etc/kolla/globals.yml}, le fichier principal ;
+  \item \texttt{/etc/kolla/passwords.yml}, dont les mots de passe vides se remplissent avec \texttt{kolla-genpwd}.
+\end{itemize}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ python3 -m venv /opt/kolla-venv && source /opt/kolla-venv/bin/activate
+$ pip install git+https://opendev.org/openstack/kolla-ansible@stable/2026.1
+$ sudo mkdir -p /etc/kolla && sudo chown $USER:$USER /etc/kolla
+$ cp -r /opt/kolla-venv/share/kolla-ansible/etc_examples/kolla/* /etc/kolla
+$ cp /opt/kolla-venv/share/kolla-ansible/ansible/inventory/multinode .
+$ kolla-ansible install-deps
+$ kolla-genpwd
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/kolla/globals.yml
+kolla_base_distro: "ubuntu"
+network_interface: "eth0"
+neutron_external_interface: "eth1"
+kolla_internal_vip_address: "10.1.0.250"
+enable_cinder: true
+enable_octavia: true
+\end{lstlisting}
+\end{minipage}\par
+
+La valeur de \texttt{kolla\_internal\_vip\_address} doit être une adresse inutilisée du réseau de gestion : keepalived la porte et la
+déplace en cas de panne ; l'interface externe doit être active, mais sans adresse IP \parencite{kolla-ansible-quickstart}. Kolla-Ansible
+est volontairement très directif : quelques variables suffisent à un déploiement fonctionnel, et il ne multiplie pas les options.
+Pour tout le reste, les fichiers déposés dans \texttt{/etc/kolla/config/} sont fusionnés avec la configuration par défaut du service
+(par exemple, \texttt{nova.conf} avec \texttt{virt\_type = qemu} pour faire tourner le cloud dans des machines virtuelles sans
+virtualisation imbriquée) \parencite{kolla-ansible-philosophy}. Les services de base (Keystone, Glance, Nova avec Placement, Neutron,
+Heat, Horizon) sont actifs par défaut ; on ajoute les autres avec les variables \texttt{enable\_*} (tableau~\ref{tab:dep-kolla-services})
+\parencite{kolla-ansible-source}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.6cm}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{9.5cm}@{}}
+\toprule
+\textbf{Service} & \textbf{Variable} & \textbf{À savoir} \\
+\midrule
+Cinder (chap.~\ref{chap:cinder}) & \texttt{enable\_cinder} & Inactif par défaut ; disques LVM (\texttt{enable\_cinder\_\allowbreak backend\_\allowbreak lvm}) ou cluster Ceph externe. \\
+Octavia (chap.~\ref{chap:octavia}) & \texttt{enable\_octavia} & Demande des certificats propres (\texttt{kolla-ansible octavia-certificates}) \parencite{kolla-ansible-source}. \\
+Ironic (chap.~\ref{chap:ironic}) & \texttt{enable\_ironic} & S'appuie sur la même base de déploiement que le reste. \\
+Magnum (chap.~\ref{chap:magnum}) & \texttt{enable\_magnum} & Le pilote de cluster reste à choisir (section~\ref{sec:ma-pilotes}). \\
+Trove (chap.~\ref{chap:trove}) & \texttt{enable\_trove} & Les images invitées restent à construire (section~\ref{sec:tr-datastores}). \\
+Swift (chap.~\ref{chap:swift}) & --- & Plus déployé par Kolla-Ansible (retiré faute de mainteneurs) ; Glance peut utiliser un Swift externe \parencite{kolla-ansible-source}. \\
+\bottomrule
+\end{tabular}
+\caption{Activer les autres services avec Kolla-Ansible.}
+\label{tab:dep-kolla-services}
+\end{table}
+
+Le déploiement suit un enchaînement fixe (figure~\ref{fig:dep-kolla-flux} et tableau~\ref{tab:dep-kolla-cmd}). La commande
+\texttt{deploy} peut être relancée autant de fois que nécessaire, mais si une tâche d'amorçage échoue, un nouvel appel ne la répare pas ;
+le plus rapide est alors de détruire ce déploiement raté (\texttt{kolla-ansible destroy}) \parencite{kolla-ansible-troubleshooting}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \foreach \x/\c/\d [count=\i] in {1.6/bootstrap-servers/{prépare les hôtes}, 4.8/prechecks/{vérifie les prérequis}, 8.0/pull/{tire les images},
+                                   11.2/deploy/{démarre les conteneurs}, 14.4/post-deploy/{écrit \texttt{clouds.yaml}}}
+    { \node[pfoc, minimum width=2.9cm, font=\scriptsize\bfseries\ttfamily] (s\i) at (\x,2.0) {\c};
+      \node[num] at (\x-1.25,2.55) {\i};
+      \node[etiqf] at (\x,1.3) {\d}; }
+  \foreach \a/\b in {1/2,2/3,3/4,4/5} \draw[fluxr] (s\a.east) -- (s\b.west);
+  \node[anchor=west, font=\footnotesize\bfseries, text=insagris] at (0,-0.1) {Ensuite :};
+  \foreach \x/\c in {3.6/reconfigure, 7.0/upgrade, 10.4/mariadb-backup, 13.8/destroy}
+    \node[psvc, minimum width=2.9cm, font=\scriptsize\bfseries\ttfamily] at (\x,-0.1) {\c};
+  \node[callout, minimum width=15.6cm] at (8.0,-1.4)
+    {Les mêmes commandes servent à installer, à reconfigurer et à mettre à niveau : l'inventaire et les variables restent la seule description du cloud.};
+\end{tikzpicture}}
+\caption{Les cinq étapes d'un déploiement avec Kolla-Ansible, puis les commandes d'exploitation.}
+\label{fig:dep-kolla-flux}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.3cm}>{\raggedright\arraybackslash}p{12.2cm}@{}}
+\toprule
+\textrm{\textbf{Commande}} & \textbf{Effet} \\
+\midrule
+bootstrap-servers & Prépare chaque hôte : paquets système, moteur de conteneurs, utilisateurs \parencite{kolla-ansible-quickstart}. \\
+prechecks & Vérifie que les hôtes sont dans un état où l'on peut déployer \parencite{kolla-ansible-troubleshooting}. \\
+pull & Tire les images sur les hôtes, sans toucher aux conteneurs. \\
+deploy & Génère les configurations, amorce les services et démarre tous les conteneurs. \\
+post-deploy & Écrit les accès administrateur dans \texttt{/etc/kolla/clouds.yaml} \parencite{kolla-ansible-quickstart}. \\
+reconfigure & Applique une modification de \texttt{globals.yml} ou de \texttt{config/}, éventuellement pour un seul service (\texttt{-t mariadb}). \\
+validate-config & Valide les fichiers de configuration générés (après un premier déploiement). \\
+upgrade & Met à niveau d'une série à la suivante : nouvelles images, migrations de schéma \parencite{kolla-ansible-operating}. \\
+mariadb-backup & Sauvegarde complète ou incrémentale (\texttt{--incremental}) de MariaDB \parencite{kolla-ansible-mariadb-backup}. \\
+destroy & Détruit les conteneurs, les volumes et la configuration des hôtes. \\
+\bottomrule
+\end{tabular}
+\caption{Les commandes de \texttt{kolla-ansible} \parencite{kolla-ansible-operating,kolla-ansible-source}.}
+\label{tab:dep-kolla-cmd}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{OpenStack-Ansible : sources et conteneurs LXC}\label{sec:dep-osa}
+% ---------------------------------------------------------------------
+
+\gls{openstackansible} (OSA) déploie OpenStack avec Ansible, lui aussi pour la production. Par défaut, tous les services sont installés
+depuis les sources dans des \glspl{venv} Python, puis isolés dans des conteneurs \gls{lxc}. Ce sont des conteneurs « machine »,
+proches de petites machines virtuelles, et non des conteneurs d'application comme ceux de Docker ; ils sont facultatifs, et un
+déploiement directement sur les hôtes est possible \parencite{osa-about}. Les hôtes pris en charge sont Ubuntu 24.04 et 26.04, Debian 13,
+CentOS Stream 10 et Rocky Linux 10 \parencite{osa-about}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    ct/.style={draw=insaorange, fill=insapeche, rounded corners=2pt, font=\scriptsize\ttfamily, minimum height=0.6cm, minimum width=2.1cm},
+    lx/.style={draw=insarouge!80!black, fill=insarouge!12, rounded corners=3pt, text width=1.8cm, align=center, font=\scriptsize,
+               minimum height=1.35cm, inner sep=2pt}]
+  \node[pcli, minimum width=3.4cm] at (3.7,5.4) {Kolla-Ansible};
+  \node[pcli, minimum width=3.4cm] at (12.0,5.4) {OpenStack-Ansible};
+  \draw[draw=insagris, dashed, rounded corners=3pt, fill=insagris!5] (0,0.6) rectangle (7.4,4.7);
+  \node[anchor=north west, font=\footnotesize\bfseries] at (0.15,4.6) {Hôte : Docker ou Podman};
+  \node[ct] at (1.4,2.9) {keystone};
+  \node[ct] at (3.7,2.9) {nova\_api};
+  \node[ct] at (6.0,2.9) {mariadb};
+  \node[font=\scriptsize, text width=6.6cm, align=center] at (3.7,1.4)
+    {un conteneur d'application par service, créé à partir d'une image (Kolla)};
+  \draw[draw=insagris, dashed, rounded corners=3pt, fill=insagris!5] (8.4,0.6) rectangle (15.8,4.7);
+  \node[anchor=north west, font=\footnotesize\bfseries] at (8.55,4.6) {Hôte : LXC (ou directement sur l'hôte)};
+  \node[lx] at (9.9,2.8) {\textbf{galera}\\ MariaDB};
+  \node[lx] at (12.1,2.8) {\textbf{keystone}\\ environnement Python};
+  \node[lx] at (14.3,2.8) {\textbf{nova\_api}\\ environnement Python};
+  \node[font=\scriptsize, text width=6.8cm, align=center] at (12.1,1.2)
+    {conteneurs « machine » LXC ; services installés depuis les sources};
+  \node[callout, minimum width=15.6cm] at (7.9,-0.6)
+    {Même outil (Ansible), deux façons d'isoler les services : des conteneurs d'application ou des conteneurs « machine ».};
+\end{tikzpicture}}
+\caption{Kolla-Ansible (à gauche) et OpenStack-Ansible (à droite). Le premier exécute chaque service dans un conteneur
+d'application ; le second installe les services dans des environnements virtuels Python, au sein de conteneurs LXC.}
+\label{fig:dep-osa}
+\end{figure}
+
+Le déploiement distingue l'hôte de déploiement, qui exécute Ansible, et les hôtes cibles. On y décrit le cloud dans
+\texttt{/etc/openstack\_deploy/} : \texttt{openstack\_user\_config.yml} affecte les machines aux rôles (au moins trois hôtes
+d'infrastructure dans \texttt{shared\_infra\_hosts}), \texttt{user\_variables.yml} règle les options globales et
+\texttt{user\_secrets.yml} contient les mots de passe, que \texttt{pw-token-gen.py} génère \parencite{osa-config}. Le choix
+\texttt{install\_method} (sources ou paquets) se fait au premier déploiement et ne peut plus changer ensuite \parencite{osa-config}.
+Trois \glspl{playbook} font le travail, dans cet ordre \parencite{osa-run} : préparer les hôtes et construire les conteneurs, installer l'infrastructure (memcached, dépôt des sources, Galera, RabbitMQ), puis les services d'OpenStack.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# openstack-ansible openstack.osa.setup_hosts
+# openstack-ansible openstack.osa.setup_infrastructure
+# openstack-ansible openstack.osa.setup_openstack
+\end{lstlisting}
+\end{minipage}\par
+
+Un déploiement « \gls{aio} » (\emph{all-in-one}, AIO), qui réunit tout sur une machine, sert à l'essai ou au laboratoire ; il demande
+au minimum 8~vCPU, 8~Go de mémoire et 50~Go de disque (le projet en recommande 16~Go et 80~Go) \parencite{osa-aio}. OSA automatise
+aussi les mises à niveau entre versions majeures. Le projet déconseille son choix si l'on veut des conteneurs d'application à 100~\%, si l'on
+préfère Puppet, ou si l'on veut installer tous les services depuis les paquets de la distribution, dont la couverture reste partielle
+\parencite{osa-about}.
+
+% ---------------------------------------------------------------------
+\subsection{Installation manuelle : ce que les outils automatisent}\label{sec:dep-manuel}
+% ---------------------------------------------------------------------
+
+Le guide d'installation officiel décrit, commande par commande, un cloud minimal installé avec les paquets de la distribution
+\parencite{install-guide,install-overview}. Aucun outil ne s'interpose : on tape les commandes sur chaque nœud. On commence par
+l'environnement commun (horloge synchronisée, dépôt des paquets OpenStack, MariaDB, RabbitMQ, memcached)
+\parencite{install-env,install-packages-ubuntu,install-sql-ubuntu,install-messaging-ubuntu}, puis on installe les services dans
+l'ordre que leurs dépendances imposent : Keystone, Glance, Placement, Nova, Neutron, puis Horizon et, en option, Cinder
+\parencite{install-overview}. Chaque service suit le même scénario en six étapes (figure~\ref{fig:dep-manuel}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    cmd/.style={font=\scriptsize\ttfamily, text width=2.55cm, align=center}]
+  \node[pgris, minimum width=15.6cm] (env) at (8.0,3.9)
+    {Environnement commun, une fois sur le contrôleur : \ NTP \ $\cdot$ \ paquets OpenStack \ $\cdot$ \ MariaDB \ $\cdot$ \ RabbitMQ \ $\cdot$ \ memcached};
+  \node[anchor=east, font=\footnotesize\bfseries, text=insarouge] at (15.9,2.85) {Pour chaque service (Glance en exemple) :};
+  \foreach \x/\t/\c [count=\i] in {1.35/{Base de\\ données}/{CREATE DATABASE glance;},
+        4.05/{Enregistrement\\ dans Keystone}/{openstack endpoint create},
+        6.75/{Paquets}/{apt install glance},
+        9.45/{Configuration}/{glance-api.conf},
+        12.15/{Schéma de\\ la base}/{glance-manage db\_sync},
+        14.85/{Redémarrage}/{systemctl restart glance-api}}
+    { \node[pfoc, minimum width=2.45cm, minimum height=1.0cm] (s\i) at (\x,1.7) {\t};
+      \node[num] at (\x-1.0,2.3) {\i};
+      \node[cmd] at (\x,0.55) {\c}; }
+  \foreach \a/\b in {1/2,2/3,3/4,4/5,5/6} \draw[fluxr] (s\a.east) -- (s\b.west);
+  \draw[fluxd] (s1.north |- env.south) -- (s1.north);
+  \node[callout, minimum width=15.6cm] at (8.0,-0.55)
+    {Six étapes à répéter pour chaque service, sur chaque nœud : c'est précisément ce que les outils de déploiement automatisent.};
+\end{tikzpicture}}
+\caption{Le scénario d'installation manuelle d'un service, illustré par Glance \parencite{glance-install}. L'étape~2 inscrit le service
+dans le catalogue de Keystone : un utilisateur de service, le rôle \texttt{admin}, une entrée de service et trois points d'accès.}
+\label{fig:dep-manuel}
+\end{figure}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ sudo rabbitmqctl add_user openstack RABBIT_PASS
+$ sudo rabbitmqctl set_permissions openstack ".*" ".*" ".*"
+$ openstack user create --domain default --password-prompt glance
+$ openstack role add --project service --user glance admin
+$ openstack service create --name glance --description "OpenStack Image" image
+$ openstack endpoint create --region RegionOne \
+    image public http://controller:9292
+\end{lstlisting}
+\end{minipage}\par
+
+Les deux premières commandes préparent RabbitMQ une fois pour toutes \parencite{install-messaging-ubuntu} ; les quatre suivantes
+enregistrent Glance dans le catalogue (chapitre~\ref{chap:keystone}), puis on répète la dernière pour les points d'accès interne et
+d'administration \parencite{glance-install}. Un nœud de calcul reçoit ensuite \texttt{nova-compute} et l'agent de Neutron, et doit être
+associé à sa cellule, depuis le contrôleur, par \texttt{nova-manage cell\_v2 discover\_hosts} \parencite{nova-install-compute}.
+
+Cette méthode a une vraie valeur pédagogique : on voit où chaque mot de passe, chaque base et chaque point d'accès apparaît. Elle ne
+tient pas dans la durée : des dizaines de fichiers à garder cohérents, aucune idempotence (relancer une commande qui a déjà réussi
+échoue ou duplique), aucune description unique du cloud, et des mises à niveau à la main. Au-delà d'un laboratoire, on délègue ce
+travail à un outil.
+
+\begin{remarque}[Deux sens de « bare metal »]
+Le support parle d'installation « bare metal ». Le terme recouvre deux idées. Installer les services \emph{directement sur le
+système des machines}, sans conteneur, c'est l'installation manuelle (ou OpenStack-Ansible sans LXC). Fournir \emph{des machines
+physiques aux utilisateurs} est le rôle d'Ironic (chapitre~\ref{chap:ironic}) ; Kayobe s'en sert en outre pour installer le cloud lui-même
+sur des serveurs nus (section~\ref{sec:dep-kolla}).
+\end{remarque}
+
+% ---------------------------------------------------------------------
+\subsection{OpenStack sur Kubernetes}\label{sec:dep-autres}
+% ---------------------------------------------------------------------
+
+Deux approches installent OpenStack \emph{sur} Kubernetes, pour des publics différents. À ne pas confondre avec Magnum
+(chapitre~\ref{chap:magnum}), qui fait l'inverse : il fournit des clusters Kubernetes \emph{sur} OpenStack.
+
+\textbf{\gls{openstackhelm}} est une collection de charts Helm qui déploient OpenStack et les services associés sur Kubernetes
+\parencite{helm-index,helm-readme}. Sa documentation vise des versions récentes de Kubernetes (1.33 à 1.35) et des hôtes Ubuntu
+\parencite{helm-readme}. Elle s'adresse à une équipe qui exploite déjà Kubernetes et sait le faire vivre.
+
+\textbf{\gls{sunbeam}} (Canonical OpenStack) s'installe avec un \emph{snap} et s'appuie sur \gls{juju} et Kubernetes. Le tutoriel officiel
+déploie un cloud à un nœud (4~cœurs, 16~Gio de mémoire, 100~Gio de disque, Ubuntu 24.04) en cinq commandes \parencite{sunbeam-tuto} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ sudo snap install openstack
+$ sunbeam prepare-node-script --bootstrap | bash -x && newgrp snap_daemon
+$ sunbeam cluster bootstrap --accept-defaults --role control,compute,storage
+$ sunbeam configure --accept-defaults --openrc demo-openrc
+$ sunbeam launch ubuntu --name test
+\end{lstlisting}
+\end{minipage}\par
+
+Pour agrandir le cloud, \texttt{sunbeam cluster add <FQDN>} produit un jeton que la nouvelle machine donne à
+\texttt{sunbeam cluster join --role <rôles> -}. Les rôles sont \texttt{control}, \texttt{compute}, \texttt{network} et
+\texttt{storage}, et \texttt{sunbeam cluster resize} répartit les fonctions de contrôle après l'ajout de nœuds de contrôle ;
+les nœuds ne se désignent que par leur nom complet (FQDN) \parencite{sunbeam-multinode}. Red Hat suit une logique voisine avec
+RHOSO, dont les opérateurs tournent sur OpenShift \parencite{rhoso-deploy}.
+
+% ---------------------------------------------------------------------
+\subsection{Choisir une méthode}\label{sec:dep-choix}
+% ---------------------------------------------------------------------
+
+Tous ces outils déploient le même OpenStack : les API, les services et les concepts des chapitres précédents ne changent pas. Seules
+varient l'installation et l'exploitation, et c'est là que se joue le choix (figure~\ref{fig:dep-choix}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, text width=6.0cm] (q1) at (3.4,5.3) {Apprendre ou développer, sur une machine jetable ?};
+  \node[pcli, text width=6.0cm] (q2) at (3.4,3.1) {La plateforme existante repose-t-elle déjà sur Kubernetes ?};
+  \node[pcli, text width=6.0cm] (q3) at (3.4,0.8) {Préférez-vous des conteneurs d'application, un par service ?};
+  \draw[fluxd] (q1.south) -- (q2.north) node[etiqf, midway, right=2pt] {non};
+  \draw[fluxd] (q2.south) -- (q3.north) node[etiqf, midway, right=2pt] {non};
+  \node[pdat, text width=6.2cm] (r1a) at (12.2,5.9) {\textbf{DevStack} : développer, tester};
+  \node[pdat, text width=6.2cm] (r1b) at (12.2,4.7) {\textbf{Installation manuelle}, \textbf{Sunbeam} à un nœud : apprendre};
+  \node[psvc, text width=6.2cm] (r2)  at (12.2,3.1) {\textbf{OpenStack-Helm}, \textbf{Sunbeam}, \textbf{RHOSO}};
+  \node[psvc, text width=6.2cm] (r3a) at (12.2,1.5) {\textbf{Kolla-Ansible} (Kayobe si le matériel est à provisionner)};
+  \node[psvc, text width=6.2cm] (r3b) at (12.2,0.1) {\textbf{OpenStack-Ansible} (sources, conteneurs LXC)};
+  \draw[fluxr] (q1.east) -- ++(0.75,0) |- (r1a.west);
+  \draw[fluxr] (q1.east) -- ++(0.75,0) |- (r1b.west);
+  \node[etiqf] at (7.0,5.55) {oui};
+  \draw[fluxr] (q2.east) -- (r2.west) node[etiqf, midway, above] {oui};
+  \draw[fluxr] (q3.east) -- ++(0.75,0) |- (r3a.west) node[etiqf, pos=0.8, above] {oui};
+  \draw[fluxr] (q3.east) -- ++(0.75,0) |- (r3b.west) node[etiqf, pos=0.8, above] {non};
+  \node[pdat, minimum width=0.5cm, inner xsep=4pt] at (2.6,-1.1) {};
+  \node[anchor=west] at (2.95,-1.1) {essai, apprentissage};
+  \node[psvc, minimum width=0.5cm, inner xsep=4pt] at (8.0,-1.1) {};
+  \node[anchor=west] at (8.35,-1.1) {production};
+  \node[callout, minimum width=15.6cm] at (7.9,-2.2)
+    {Le bon choix dépend des compétences de l'équipe (Ansible, Kubernetes) et du support attendu, pas d'un classement général.};
+\end{tikzpicture}}
+\caption{Arbre de décision pour choisir une méthode de déploiement. Ce n'est pas la seule lecture possible : un fournisseur
+(Canonical, Red Hat) peut imposer son offre, un client déjà équipé d'Ansible ira vers Kolla-Ansible ou OpenStack-Ansible.}
+\label{fig:dep-choix}
+\end{figure}
+
+Quelques critères aident à départager Kolla-Ansible et OpenStack-Ansible, les deux outils de production les plus répandus :
+
+\begin{itemize}
+  \item \textbf{Isolation} : Kolla-Ansible isole chaque service dans une image figée ; OpenStack-Ansible installe depuis les sources
+        dans des environnements virtuels, au sein de conteneurs LXC \parencite{osa-about}.
+  \item \textbf{Configuration} : Kolla-Ansible est directif (quelques variables, puis des fichiers fusionnés) ; OpenStack-Ansible
+        expose toute la configurabilité de ses rôles \parencite{kolla-ansible-philosophy,osa-about}.
+  \item \textbf{Images} : avec Kolla-Ansible, il faut construire et héberger ses propres images pour la production ; avec
+        OpenStack-Ansible, on gère un dépôt de sources et des environnements virtuels.
+  \item \textbf{Mises à niveau} : toutes deux les automatisent (\texttt{kolla-ansible upgrade}, playbooks d'OpenStack-Ansible) ;
+        aucune ne dispense de lire les notes de version.
+\end{itemize}
+
+% ---------------------------------------------------------------------
+\subsection{Exploiter un cloud déployé}\label{sec:dep-exploitation}
+% ---------------------------------------------------------------------
+
+Déployer n'est que le début. Ce qui distingue un cloud fiable, c'est ce qu'on met en place autour : vérification, haute
+disponibilité, sécurité, sauvegardes, supervision, mises à niveau.
+
+\textbf{Vérifier.} Avant d'ouvrir le cloud aux utilisateurs, on contrôle que chaque service est enregistré et vivant. Avec
+Kolla-Ansible, \texttt{post-deploy} écrit les accès administrateur dans \texttt{/etc/kolla/clouds.yaml}, et le script \texttt{init-runonce}
+crée des réseaux, une image et d'autres ressources d'exemple (démonstration seulement) \parencite{kolla-ansible-quickstart} ; avec OpenStack-Ansible,
+on utilise le conteneur utilitaire \parencite{osa-verify}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack endpoint list                # chaque service a ses points d'accès
+$ openstack compute service list         # conductor, scheduler, compute : up
+$ openstack network agent list           # agents Neutron : Alive
+$ openstack volume service list          # cinder-scheduler, cinder-volume : up
+$ nova-status upgrade check              # prérequis d'une mise à niveau de Nova
+\end{lstlisting}
+\end{minipage}\par
+
+\textbf{Haute disponibilité.} Elle repose sur deux principes \parencite{ha-concepts}. Les services sans état (API, ordonnanceurs)
+tournent en actif/actif derrière HAProxy et une adresse virtuelle que \gls{keepalived} déplace en cas de panne. Les services à état
+(MariaDB avec \gls{galera}, \gls{rabbitmq}) se répliquent en cluster d'un nombre impair de nœuds, dont le quorum est la majorité
+(\(\lfloor n/2\rfloor+1\)) ; le \gls{plancontrole} compte donc au moins trois contrôleurs. La haute disponibilité ne protège pas
+les machines des utilisateurs : si un hyperviseur tombe, Nova ne les relance pas seul (on évacue les instances avec
+\texttt{openstack server evacuate}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{13.1cm}@{}}
+\toprule
+\textbf{Sujet} & \textbf{Mise en œuvre avec Kolla-Ansible} \\
+\midrule
+Répartiteur & HAProxy et keepalived (groupe \texttt{loadbalancer}, qui reprend par défaut les nœuds \texttt{network}) ; variables \texttt{enable\_haproxy} et \texttt{enable\_keepalived} \parencite{kolla-ansible-haproxy}. \\
+TLS & \texttt{kolla\_enable\_tls\_external} et \texttt{kolla\_enable\_tls\_internal} ; certificats dans \texttt{/etc/kolla/certificates} (\texttt{haproxy.pem}, \texttt{haproxy-internal.pem}) ; \texttt{kolla-ansible certificates} produit une autorité de test ; \texttt{enable\_letsencrypt} automatise le renouvellement \parencite{kolla-ansible-tls}. \\
+Secrets & Mots de passe de \texttt{passwords.yml} (à sauvegarder avant tout changement). Rotation : vider les valeurs, \texttt{kolla-genpwd -p}, puis \texttt{kolla-ansible reconfigure} ; pour RabbitMQ, \texttt{stop} puis \texttt{deploy} \parencite{kolla-ansible-passwords}. \\
+Sauvegarde & \texttt{kolla-ansible mariadb-backup} (complète ou incrémentale) \parencite{kolla-ansible-mariadb-backup} ; copie de \texttt{/etc/kolla} et de l'inventaire ; volumes et images selon les chapitres~\ref{chap:cinder} et~\ref{chap:glance}. \\
+Journaux & Fichiers dans \texttt{/var/log/kolla/<service>} et \texttt{docker logs} ; \texttt{enable\_central\_logging} ajoute Fluentd et OpenSearch \parencite{kolla-ansible-troubleshooting,kolla-ansible-logging}. \\
+Supervision & \texttt{enable\_prometheus} déploie Prometheus, que l'on peut relier à Grafana \parencite{kolla-ansible-prometheus}. \\
+\bottomrule
+\end{tabular}
+\caption{L'exploitation d'un cloud Kolla-Ansible : ce que l'outil apporte.}
+\label{tab:dep-exploit}
+\end{table}
+
+\textbf{Sécurité et sauvegardes.} Trois règles reviennent partout : garder le réseau de gestion interne (il porte les mots de passe
+et les messages), chiffrer les API exposées (TLS) et protéger les secrets (tableau~\ref{tab:dep-exploit}). Une sauvegarde ne vaut que
+si on sait restaurer : la base de données de chaque service, la configuration de l'outil et les mots de passe sont à sauvegarder
+régulièrement et à restaurer lors d'un exercice.
+
+\textbf{Mises à niveau.} Une version sort tous les six mois, mais on n'est pas obligé de les suivre toutes. Une version sur deux,
+la première de l'année (2025.1, 2026.1\dots), est une version \gls{slurp} : on peut passer directement de l'une à la suivante, alors
+qu'une version intermédiaire ne se met à niveau que vers la version qui la suit \parencite{openstack-slurp} (figure~\ref{fig:dep-slurp}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize, adj/.style={-{Stealth[length=2mm]}, thick, insagris}]
+  \foreach \x/\v/\n/\k [count=\i] in {1.5/2025.1/{}/psvc, 4.5/2025.2/{}/pgris, 7.5/2026.1/{Gazpacho}/psvc, 10.5/2026.2/{Hibiscus}/pgris, 13.5/2027.1/{Indri}/psvc}
+    { \node[\k, minimum width=2.5cm, minimum height=1.1cm] (v\i) at (\x,1.0) {\textbf{\v}\\ {\scriptsize\mdseries \n}}; }
+  \node[font=\scriptsize] at (1.5,0.2) {SLURP};
+  \node[font=\scriptsize] at (7.5,0.2) {SLURP};
+  \node[font=\scriptsize] at (13.5,0.2) {SLURP, en développement};
+  \foreach \a/\b in {1/2,2/3,3/4,4/5} \draw[adj] (v\a.east) -- (v\b.west);
+  \draw[fluxo] (v1.north) to[out=65,in=115] node[etiqf, midway, above] {saut SLURP $\to$ SLURP} (v3.north);
+  \draw[fluxo] (v3.north) to[out=65,in=115] node[etiqf, midway, above] {saut SLURP $\to$ SLURP} (v5.north);
+  \node[callout, minimum width=15.6cm] at (7.5,-0.8)
+    {Depuis 2025.2, il faut passer par 2026.1 : une version non SLURP ne se met à niveau que vers la suivante.};
+\end{tikzpicture}}
+\caption{Chemins de mise à niveau (flèches grises : version suivante, toujours possible). Les noms des versions
+2026.1, 2026.2 et 2027.1 sont ceux de la documentation \parencite{openstack-releases}.}
+\label{fig:dep-slurp}
+\end{figure}
+
+On met toujours le plan de contrôle à niveau avant les nœuds de calcul, que l'on traite par lots : services anciens et récents
+doivent coexister un temps. Nova impose un ordre (Placement d'abord, puis \texttt{nova-conductor} en premier et \texttt{nova-api} en
+dernier), puis des migrations de données « en ligne » (\texttt{nova-manage db online\_data\_migrations}) \parencite{nova-upgrades}.
+Kolla-Ansible enchaîne tout cela dans une seule commande \parencite{kolla-ansible-operating} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ cp -r /etc/kolla /etc/kolla.sauvegarde        # configuration d'abord
+$ pip install --upgrade \
+    git+https://opendev.org/openstack/kolla-ansible@stable/2026.2
+$ kolla-ansible install-deps
+$ kolla-mergepwd --old passwords.yml.old --new passwords.yml.new \
+    --final /etc/kolla/passwords.yml
+$ kolla-ansible pull && kolla-ansible prechecks
+$ kolla-ansible upgrade
+\end{lstlisting}
+\end{minipage}\par
+
+Avant cela, on lit les notes de version de la série visée, on met à jour l'inventaire et \texttt{globals.yml} d'après les exemples
+fournis, et l'on fusionne les mots de passe avec \texttt{kolla-mergepwd}. Pour un saut SLURP, RabbitMQ ne supporte pas un saut de deux
+versions : il faut d'abord le mettre à niveau vers une version intermédiaire. La documentation ne décrit pas de retour arrière :
+on se protège par une sauvegarde de la base et de la configuration, et par un essai préalable sur un environnement de test
+\parencite{kolla-ansible-operating}.
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:dep-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Choisir un outil et une topologie}\label{ex:dep-choix}
+Une PME de vingt utilisateurs veut une plateforme interne de développement sur quatre serveurs physiques. Une personne de l'équipe
+maîtrise Ansible, personne ne connaît Kubernetes. Proposer un outil, une répartition des rôles et les points à prévoir avant
+l'ouverture.
+\end{exercice}
+\begin{correction}
+Pas de réponse unique ; l'argumentation compte. Production interne, compétence Ansible, aucun Kubernetes : on écarte DevStack,
+Packstack, l'installation manuelle et les approches fondées sur Kubernetes, et l'on retient \textbf{Kolla-Ansible} ou
+\textbf{OpenStack-Ansible}. Trois serveurs forment les contrôleurs (quorum de MariaDB et de RabbitMQ) et portent aussi le réseau et
+le calcul ; le quatrième est un nœud de calcul. Les machines des utilisateurs partagent alors les serveurs avec le plan de
+contrôle : acceptable à cette échelle, à surveiller. À prévoir : un hôte de déploiement distinct, un registre d'images local, une
+adresse virtuelle inutilisée sur le réseau de gestion, TLS, la sauvegarde de MariaDB et de la configuration, une mise à niveau
+annuelle sur les versions SLURP.
+\end{correction}
+
+\begin{exercice}{Relire une configuration}\label{ex:dep-relire}
+Cet extrait d'un déploiement Kolla-Ansible contient trois erreurs de conception ; lesquelles ? On sait que \texttt{node1} a l'adresse
+\texttt{10.1.0.11} sur \texttt{eth0}.
+
+\begin{lstlisting}
+[control]
+node1
+node2
+[network]
+node1
+# globals.yml
+kolla_internal_vip_address: "10.1.0.11"
+network_interface: "eth0"
+neutron_external_interface: "eth0"
+\end{lstlisting}
+\end{exercice}
+\begin{correction}
+(1) \textbf{Deux contrôleurs} n'apportent aucune haute disponibilité : la panne de l'un fait perdre le quorum ; il en faut trois.
+(2) L'\textbf{adresse virtuelle est celle de \texttt{node1}} : elle doit être inutilisée sur le réseau de gestion, car keepalived la
+porte et la déplace. (3) L'\textbf{interface externe est celle de gestion} : \texttt{neutron\_external\_interface} doit être une
+interface dédiée, active et sans adresse IP, qui porte \texttt{br-ex}. Au passage, le groupe \texttt{network} se réduit à
+\texttt{node1} : HAProxy et keepalived, qui suivent ce groupe, n'ont alors aucun nœud de secours.
+\end{correction}
+
+\begin{exercice}{Ajouter un service à un cloud en production}\label{ex:dep-service}
+Le cloud, déployé avec Kolla-Ansible, doit fournir des répartiteurs de charge (chapitre~\ref{chap:octavia}). Quelles modifications et
+quelles commandes faut-il ? Que reste-t-il à faire hors de l'outil ?
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}[style=terminal]
+$ vi /etc/kolla/globals.yml                # enable_octavia: true
+$ kolla-ansible octavia-certificates
+$ kolla-ansible prechecks
+$ kolla-ansible deploy
+\end{lstlisting}
+\texttt{deploy} est rejouable : il applique l'état décrit par les variables, sans repartir de zéro. Les certificats propres à
+Octavia sont indispensables. Hors de l'outil, il reste à fournir ce que le chapitre~\ref{chap:octavia} décrit : l'image
+d'amphore, le réseau et le groupe de sécurité de gestion, la \emph{flavor} des amphores.
+\end{correction}
+
+\begin{exercice}{Planifier une mise à niveau}\label{ex:dep-niveau}
+Un cloud tourne en 2025.2 et l'équipe vise 2026.2. Peut-elle y passer directement ? Décrire la première mise à niveau avec
+Kolla-Ansible.
+\end{exercice}
+\begin{correction}
+Non : 2025.2 n'est pas une version SLURP, et ne se met à niveau que vers la suivante, 2026.1 ; de là, 2026.2 est la version
+suivante. Il faut donc \textbf{deux mises à niveau successives}, chacune suivie d'une validation. Pour la première : lire les notes
+de version de 2026.1 ; sauvegarder \texttt{/etc/kolla} et la base ; installer la branche \texttt{stable/2026.1} de
+\texttt{kolla-ansible} ; \texttt{kolla-ansible install-deps} ; mettre à jour l'inventaire et \texttt{globals.yml} d'après les
+exemples et fusionner les mots de passe avec \texttt{kolla-mergepwd} ; \texttt{kolla-ansible pull} puis \texttt{prechecks} ; enfin
+\texttt{kolla-ansible upgrade}, qui recrée les conteneurs et migre les schémas. Aucun retour arrière n'est documenté : la
+sauvegarde et l'essai sur un environnement de test sont la seule protection.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:dep-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Un déploiement assemble des services, une infrastructure partagée (base, file de messages, cache, répartiteur) et des
+        machines en rôles ; l'outil de déploiement automatise toute la pile.
+  \item Un nombre impair de contrôleurs (trois au moins) pour le quorum ; séparer au moins les réseaux de gestion, de tunnel et
+        externe, et garder le réseau de gestion interne.
+  \item DevStack (sources, machine jetable) : développement et apprentissage. Kolla-Ansible (images de conteneurs, à construire
+        soi-même en production) et OpenStack-Ansible (sources, conteneurs LXC) : production.
+  \item TripleO est retiré ; Kolla-Ansible ne déploie plus Swift et ne déploie pas Ceph.
+  \item L'exploitation compte autant que l'installation : haute disponibilité, TLS, secrets, sauvegardes, supervision, mises à
+        niveau (SLURP : une version sur deux, avec saut direct).
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.0cm}>{\raggedright\arraybackslash}p{9.8cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Préparer hôtes et secrets & \texttt{kolla-ansible bootstrap-servers}, \texttt{kolla-genpwd} & \ref{sec:dep-kolla} \\
+Vérifier puis déployer & \texttt{kolla-ansible prechecks}, \texttt{pull}, \texttt{deploy} & \ref{sec:dep-kolla} \\
+Appliquer une modification & \texttt{kolla-ansible reconfigure [-t SERVICE]} & \ref{sec:dep-kolla} \\
+Sauvegarder MariaDB & \texttt{kolla-ansible mariadb-backup [--incremental]} & \ref{sec:dep-exploitation} \\
+Mettre à niveau & \texttt{kolla-ansible upgrade} & \ref{sec:dep-exploitation} \\
+Contrôler les services & \texttt{openstack compute service list}, \texttt{network agent list} & \ref{sec:dep-exploitation} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Choisir un outil et une topologie à partir d'un contexte, en justifiant (exercice~\ref{ex:dep-choix}).
+  \item Relire un inventaire et un \texttt{globals.yml} pour y repérer les erreurs de quorum, d'adresse virtuelle et d'interfaces
+        (exercice~\ref{ex:dep-relire}).
+  \item Ajouter un service à un cloud Kolla-Ansible et nommer ce qui reste à faire hors de l'outil (exercice~\ref{ex:dep-service}).
+  \item Planifier un chemin de mise à niveau avec les versions SLURP (exercice~\ref{ex:dep-niveau}).
+\end{itemize}
+\end{savoirfaire}

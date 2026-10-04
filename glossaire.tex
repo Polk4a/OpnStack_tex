@@ -446,3 +446,82 @@
 
 \newglossaryentry{operateurk8s}{name={opérateur Kubernetes}, sort={operateur Kubernetes}, text={opérateur Kubernetes}, plural={opérateurs Kubernetes},
   description={Logiciel qui s'exécute dans un cluster Kubernetes et y automatise l'exploitation d'une application à état, par exemple le déploiement, les sauvegardes et la bascule d'une base de données}}
+
+% ---- Chapitre 15 : méthodes de déploiement ----
+\newglossaryentry{plancontrole}{name={plan de contrôle (control plane)}, sort={plan de controle}, text={plan de contrôle},
+  description={Ensemble des services et des machines qui pilotent le cloud (API, ordonnanceurs, base de données, file de messages), par opposition aux nœuds qui exécutent les machines des utilisateurs}}
+
+\newglossaryentry{slurp}{name={SLURP (\emph{Skip Level Upgrade Release Process})}, sort={SLURP}, text={SLURP},
+  description={Une version d'OpenStack sur deux, la première de l'année (2025.1, 2026.1\dots) ; on peut passer directement de l'une à la suivante, sans étape intermédiaire}}
+
+\newglossaryentry{quorum}{name={quorum}, sort={quorum}, text={quorum},
+  description={Nombre minimal de nœuds d'un cluster qui doivent fonctionner pour qu'il reste actif, soit plus de la moitié ; d'où un nombre impair de nœuds (trois en tolèrent un en panne)}}
+
+\newglossaryentry{ansible}{name={Ansible}, sort={Ansible}, text={Ansible},
+  description={Outil d'automatisation qui configure des machines distantes par SSH, en appliquant des scénarios (\emph{playbooks}) décrits en YAML ; il sert de moteur à Kolla-Ansible, OpenStack-Ansible et Kayobe}}
+
+\newglossaryentry{playbook}{name={playbook (Ansible)}, sort={playbook}, text={playbook}, plural={playbooks},
+  description={Fichier YAML qui décrit, pour un groupe de machines, la suite de tâches qu'Ansible doit appliquer}}
+
+\newglossaryentry{inventaireansible}{name={inventaire (Ansible)}, sort={inventaire Ansible}, text={inventaire},
+  description={Fichier qui range les machines à configurer dans des groupes (\texttt{control}, \texttt{compute}\dots) ; c'est lui qui affecte les rôles aux nœuds d'un déploiement}}
+
+\newglossaryentry{devstack}{name={DevStack}, sort={DevStack}, text={DevStack},
+  description={Série de scripts qui installent un cloud OpenStack complet sur une seule machine à partir des dépôts Git ; destinée au développement, aux tests et à l'apprentissage}}
+
+\newglossaryentry{kolla}{name={Kolla}, sort={Kolla}, text={Kolla},
+  description={Projet qui construit les images de conteneurs de chaque service OpenStack (outil \texttt{kolla-build})}}
+
+\newglossaryentry{kollaansible}{name={Kolla-Ansible}, sort={Kolla-Ansible}, text={Kolla-Ansible},
+  description={Outil de déploiement à base de playbooks Ansible qui installe les images de Kolla sur les nœuds, chaque service dans son conteneur Docker ou Podman}}
+
+\newglossaryentry{kayobe}{name={Kayobe}, sort={Kayobe}, text={Kayobe},
+  description={Outil qui enveloppe Kolla-Ansible et y ajoute la configuration des hôtes et le provisionnement du matériel, depuis le serveur nu}}
+
+\newglossaryentry{openstackansible}{name={OpenStack-Ansible (OSA)}, sort={OpenStack-Ansible}, text={OpenStack-Ansible},
+  description={Outil de déploiement à base d'Ansible qui installe les services depuis les sources dans des environnements virtuels Python, isolés dans des conteneurs LXC}}
+
+\newglossaryentry{openstackhelm}{name={OpenStack-Helm}, sort={OpenStack-Helm}, text={OpenStack-Helm},
+  description={Collection de charts Helm qui déploient OpenStack sur Kubernetes, chaque service tournant dans des pods}}
+
+\newglossaryentry{packstack}{name={Packstack}, sort={Packstack}, text={Packstack},
+  description={Installeur du projet RDO pour la famille Red Hat (CentOS Stream), réservé aux preuves de concept}}
+
+\newglossaryentry{sunbeam}{name={Sunbeam (Canonical OpenStack)}, sort={Sunbeam}, text={Sunbeam},
+  description={Offre de Canonical qui déploie OpenStack avec un snap, Juju et Kubernetes, d'un seul nœud à un cluster}}
+
+\newglossaryentry{juju}{name={Juju}, sort={Juju}, text={Juju},
+  description={Outil de Canonical qui déploie et relie des applications à partir de modèles appelés charmes ; Sunbeam s'en sert pour piloter les services d'OpenStack}}
+
+\newglossaryentry{lxc}{name={LXC}, sort={LXC}, text={LXC},
+  description={\emph{Linux Containers} : conteneurs « machine » qui isolent un système complet, proches d'une petite machine virtuelle ; OpenStack-Ansible y installe les services}}
+
+\newglossaryentry{venv}{name={environnement virtuel Python}, sort={environnement virtuel Python}, text={environnement virtuel}, plural={environnements virtuels},
+  description={Répertoire contenant un interpréteur Python et ses bibliothèques, isolé de celles du système ; chaque service y a ses dépendances propres}}
+
+\newglossaryentry{registre}{name={registre d'images (conteneurs)}, sort={registre d'images}, text={registre d'images}, plural={registres d'images},
+  description={Serveur qui stocke les images de conteneurs et les distribue aux nœuds ; en production, on installe un registre local plutôt que de tirer les images publiques}}
+
+\newglossaryentry{galera}{name={Galera}, sort={Galera}, text={Galera},
+  description={Extension de réplication multimaître de MariaDB : chaque nœud du cluster accepte les écritures et tous gardent le même état ; elle exige un quorum}}
+
+\newglossaryentry{rabbitmq}{name={RabbitMQ}, sort={RabbitMQ}, text={RabbitMQ},
+  description={Courtier de messages qui porte les appels RPC entre les processus d'un même service OpenStack (API, conductor, agents) ; déployé en cluster en production}}
+
+\newglossaryentry{keepalived}{name={keepalived}, sort={keepalived}, text={keepalived},
+  description={Logiciel qui fait porter une adresse IP virtuelle (VIP) par l'un des nœuds et la déplace sur un autre si celui-ci tombe en panne}}
+
+\newglossaryentry{aio}{name={all-in-one (AIO)}, sort={all-in-one}, text={tout-en-un},
+  description={Déploiement qui réunit tous les rôles sur une seule machine, pour l'essai ou le laboratoire}}
+
+\newglossaryentry{ceph}{name={Ceph}, sort={Ceph}, text={Ceph},
+  description={Système de stockage distribué (blocs, objets, fichiers) souvent associé à OpenStack, pour les volumes de Cinder, les images de Glance et les disques de Nova ; Kolla-Ansible s'y connecte sans le déployer}}
+
+\newglossaryentry{ntp}{name={NTP}, sort={NTP}, text={NTP},
+  description={\emph{Network Time Protocol} : synchronise les horloges des machines ; indispensable à un cloud, dont les jetons et les clusters dépendent de l'heure}}
+
+\newglossaryentry{oslo}{name={Oslo}, sort={Oslo}, text={Oslo},
+  description={Ensemble de bibliothèques Python communes aux services d'OpenStack : configuration (\texttt{oslo.config}), messagerie RPC (\texttt{oslo.messaging}), accès aux bases (\texttt{oslo.db}), politiques (\texttt{oslo.policy})}}
+
+\newglossaryentry{quota}{name={quota}, sort={quota}, text={quota}, plural={quotas},
+  description={Limite que le cloud impose à un projet sur une ressource (instances, cœurs, mémoire, volumes, adresses flottantes) ; chaque service gère les siens}}

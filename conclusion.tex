@@ -1,9 +1,378 @@
 % =====================================================================
 %  Conclusion : importée par main.tex avec \include{conclusion}.
 %  Section non numérotée, ajoutée au sommaire.
-%  Contenu à rédiger.
+%  Sources : les chapitres du cours, le registre des projets officiels
+%  (gouvernance d'OpenStack), l'annonce de l'arrivée de l'OpenInfra Foundation
+%  à la Linux Foundation, la page de l'examen COA et le guide du contributeur
+%  (voir sources.bib). Conclusion détaillée : 10 pages au plus.
 % =====================================================================
 
 \phantomsection
 \section*{Conclusion}
 \addcontentsline{toc}{section}{Conclusion}
+
+% Figures et tableaux de cette section non numérotée : numérotation propre (C.1, C.2\dots)
+% pour ne pas prolonger celle du chapitre précédent.
+\setcounter{figure}{0}\setcounter{table}{0}
+\renewcommand{\thefigure}{C.\arabic{figure}}\renewcommand{\thetable}{C.\arabic{table}}
+\renewcommand{\theHfigure}{C.\arabic{figure}}\renewcommand{\theHtable}{C.\arabic{table}}
+
+Ce cours a présenté OpenStack comme une famille de services indépendants qui, ensemble, transforment des serveurs, des disques et
+des réseaux en un cloud en libre-service. Il est parti de l'identité (Keystone), a suivi la vie d'une machine virtuelle (Nova,
+Placement, Glance, Neutron, Cinder), puis a élargi le regard aux services bâtis sur ce socle (Horizon, Octavia, Swift, Heat, Ironic,
+Magnum, Trove) et s'est achevé du côté de l'administrateur, avec le déploiement. Cette conclusion rassemble l'ensemble : une carte,
+un scénario de bout en bout, les principes qui reviennent d'un service à l'autre, des repères pour choisir et exploiter, puis les
+limites de la plateforme, ce que le cours n'a pas traité et la manière de poursuivre.
+
+% ---------------------------------------------------------------------
+\subsection*{La carte d'ensemble}
+% ---------------------------------------------------------------------
+
+La figure~\ref{fig:concl-carte} range les services par rôle. Tous reposent sur la même infrastructure (base de données, file de
+messages, cache) et sur Keystone, qui authentifie chaque appel ; l'outil de déploiement installe et met à jour le tout. Le
+tableau~\ref{tab:concl-services} rappelle, pour chaque service, son rôle et les processus à connaître.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=13.0cm] at (8.5,8.3)
+    {Utilisateurs \ $\cdot$ \ ligne de commande \ $\cdot$ \ API REST \ $\cdot$ \ Horizon (chap.~\ref{chap:horizon})};
+  % services applicatifs
+  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (3.5,6.8) {\textbf{Heat} {\scriptsize\mdseries(chap.~\ref{chap:heat})}\\ {\scriptsize\mdseries orchestration}};
+  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (6.85,6.8) {\textbf{Octavia} {\scriptsize\mdseries(chap.~\ref{chap:octavia})}\\ {\scriptsize\mdseries répartition de charge}};
+  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (10.2,6.8) {\textbf{Magnum} {\scriptsize\mdseries(chap.~\ref{chap:magnum})}\\ {\scriptsize\mdseries Kubernetes managé}};
+  \node[psvc, minimum width=2.9cm, minimum height=1.1cm] at (13.55,6.8) {\textbf{Trove} {\scriptsize\mdseries(chap.~\ref{chap:trove})}\\ {\scriptsize\mdseries bases de données}};
+  % services de base
+  \node[pfoc, minimum width=3.75cm, minimum height=1.1cm] at (4.5,5.2) {Nova, Placement\\ {\scriptsize\mdseries calcul (chap.~\ref{chap:nova}, \ref{chap:placement})}};
+  \node[pfoc, minimum width=3.75cm, minimum height=1.1cm] at (8.5,5.2) {Neutron\\ {\scriptsize\mdseries réseau (chap.~\ref{chap:neutron})}};
+  \node[pfoc, minimum width=3.75cm, minimum height=1.1cm] at (12.5,5.2) {Glance\\ {\scriptsize\mdseries images (chap.~\ref{chap:glance})}};
+  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (4.5,3.75) {Cinder\\ {\scriptsize\mdseries volumes (chap.~\ref{chap:cinder})}};
+  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (8.5,3.75) {Swift\\ {\scriptsize\mdseries objets (chap.~\ref{chap:swift})}};
+  \node[psvc, minimum width=3.75cm, minimum height=1.1cm] at (12.5,3.75) {Ironic\\ {\scriptsize\mdseries machines physiques (chap.~\ref{chap:ironic})}};
+  % infrastructure
+  \node[pgris, minimum width=13.0cm, minimum height=0.95cm] at (8.5,2.3)
+    {Infrastructure partagée\\ {\scriptsize\mdseries MariaDB \ $\cdot$ \ RabbitMQ \ $\cdot$ \ memcached \ $\cdot$ \ HAProxy}};
+  \node[pgris, minimum width=13.0cm, minimum height=0.95cm] at (8.5,1.05)
+    {Machines et réseaux\\ {\scriptsize\mdseries hyperviseurs, disques, réseau physique, serveurs nus}};
+  % barres latérales
+  \node[draw=insarouge, thick, rounded corners=4pt, fill=insarouge!8, minimum width=1.5cm, minimum height=8.7cm] at (0.45,4.65) {};
+  \node[rotate=90, font=\footnotesize\bfseries, text=insarouge] at (0.45,4.65) {Keystone : identité, catalogue, tokens (chap.~\ref{chap:keystone})};
+  \node[draw=insarouge, thick, rounded corners=4pt, fill=insarouge!8, minimum width=1.5cm, minimum height=8.7cm] at (16.55,4.65) {};
+  \node[rotate=90, font=\footnotesize\bfseries, text=insarouge] at (16.55,4.65) {Déploiement et exploitation (chap.~\ref{chap:deploiement})};
+  \node[callout, minimum width=16.4cm] at (8.5,-0.55)
+    {Des services indépendants, une identité commune, une infrastructure partagée : la plateforme tient à ces trois choix.};
+\end{tikzpicture}}
+\caption{Les services d'OpenStack étudiés dans le cours. En rouge plein, le cœur d'un cloud (calcul, réseau, images) ; en pêche, les
+autres services ; en gris, ce qui les supporte.}
+\label{fig:concl-carte}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.0cm}>{\raggedright\arraybackslash}p{3.9cm}>{\raggedright\arraybackslash}p{8.3cm}r@{}}
+\toprule
+\textbf{Service} & \textbf{Rôle} & \textbf{Processus et composants à connaître} & \textbf{Chap.} \\
+\midrule
+Keystone & Identité, authentification, catalogue & Service HTTP (WSGI) ; tokens Fernet ; catalogue des points d'accès & \ref{chap:keystone} \\
+Nova & Instances (calcul) & \texttt{nova-api}, \texttt{nova-conductor}, \texttt{nova-scheduler}, \texttt{nova-compute} & \ref{chap:nova} \\
+Placement & Inventaire et allocation des ressources & \texttt{placement-api} : fournisseurs, classes, allocations & \ref{chap:placement} \\
+Glance & Images & \texttt{glance-api} et ses magasins & \ref{chap:glance} \\
+Neutron & Réseau & \texttt{neutron-server}, agents (L3, DHCP), OVS ou OVN & \ref{chap:neutron} \\
+Cinder & Volumes (stockage bloc) & \texttt{cinder-api}, \texttt{-scheduler}, \texttt{-volume}, \texttt{-backup} & \ref{chap:cinder} \\
+Horizon & Tableau de bord & Application Django sous Apache (\texttt{mod\_wsgi}) & \ref{chap:horizon} \\
+Octavia & Répartition de charge & \texttt{octavia-api}, worker, health manager, housekeeping ; amphores & \ref{chap:octavia} \\
+Swift & Stockage objet & Proxy, serveurs de comptes, de conteneurs et d'objets ; anneaux & \ref{chap:swift} \\
+Heat & Orchestration & \texttt{heat-api}, \texttt{heat-engine} ; modèles HOT & \ref{chap:heat} \\
+Ironic & Machines physiques & \texttt{ironic-api}, \texttt{ironic-conductor}, agent \texttt{ironic-python-agent} & \ref{chap:ironic} \\
+Magnum & Clusters Kubernetes & \texttt{magnum-api}, \texttt{magnum-conductor} ; pilote de cluster & \ref{chap:magnum} \\
+Trove & Bases de données & \texttt{trove-api}, \texttt{trove-taskmanager}, \texttt{trove-conductor} ; agent invité & \ref{chap:trove} \\
+Outils & Installer, exploiter, mettre à niveau & Kolla-Ansible, OpenStack-Ansible, DevStack, \dots & \ref{chap:deploiement} \\
+\bottomrule
+\end{tabular}
+\caption{Les services du cours en un coup d'œil.}
+\label{tab:concl-services}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection*{Un scénario de bout en bout}
+% ---------------------------------------------------------------------
+
+Rien ne montre mieux la coopération des services qu'une demande ordinaire : une machine virtuelle dotée d'un disque de données et
+d'une adresse publique. Cinq commandes y suffisent ; la figure~\ref{fig:concl-seq} en suit les appels.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack volume create --size 20 donnees
+$ openstack server create --image ubuntu-24.04 --flavor m1.small --network prive vm1
+$ openstack server add volume vm1 donnees
+$ openstack floating ip create public
+$ openstack server add floating ip vm1 203.0.113.10
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.4cm] (c) at (0.8,0)  {Client};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (k) at (3.9,0)  {Keystone};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (ci) at (7.0,0)  {Cinder};
+  \node[acteur, minimum width=2.4cm, fill=insarouge, text=white, draw=black] (n) at (10.1,0) {Nova};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (g) at (13.2,0) {Glance};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (ne) at (16.3,0) {Neutron};
+  \foreach \n in {c,k,ci,n,g,ne} \draw[vie] (\n.south) -- ++(0,-10.9);
+  \seqmsg{0.8}{3.9}{-1.3}{1}{authentification}
+  \seqrep{3.9}{0.8}{-2.0}{}{token}
+  \seqmsg{0.8}{7.0}{-2.9}{2}{\texttt{POST /volumes}}
+  \seqrep{7.0}{0.8}{-3.6}{}{volume \texttt{available}}
+  \seqmsg{0.8}{10.1}{-4.5}{3}{\texttt{POST /servers}}
+  \seqrep{10.1}{0.8}{-5.2}{}{\texttt{202 Accepted}}
+  \seqmsg{10.1}{13.2}{-6.1}{4}{image}
+  \seqmsg{10.1}{16.3}{-7.0}{5}{port réseau}
+  \node[callout, font=\scriptsize] at (10.1,-7.8) {instance \texttt{ACTIVE}};
+  \seqmsg{0.8}{10.1}{-8.6}{6}{\texttt{add volume}}
+  \seqmsg{10.1}{7.0}{-9.5}{7}{attacher le volume}
+  \seqmsg{0.8}{16.3}{-10.4}{8}{adresse flottante}
+  \node[callout, font=\scriptsize, text width=4.4cm] at (14.6,-2.9)
+    {Chaque appel porte le token ; chaque service vérifie les droits et les quotas.};
+\end{tikzpicture}}
+\caption{Le scénario en huit échanges. Le client s'authentifie (1), crée le volume (2) et la machine (3) ; Nova répond sans attendre,
+puis obtient l'image et le port réseau auprès de Glance et de Neutron (4, 5), détaillés dans la figure~\ref{fig:nova-seq}. Le
+volume est attaché par Nova auprès de Cinder (6, 7) et l'adresse flottante associée au port par Neutron (8).}
+\label{fig:concl-seq}
+\end{figure}
+
+Quatre idées se dégagent. Un seul token, émis par Keystone, sert auprès de tous les services. Les services collaborent par leurs API
+REST, sans jamais lire la base les uns des autres. Nova répond \texttt{202 Accepted} avant d'avoir terminé : l'état de l'instance
+(\texttt{BUILD}, puis \texttt{ACTIVE}) renseigne sur l'avancement. Enfin, quand une machine finit en \texttt{ERROR}, la bonne question est
+« quel service a refusé, et pourquoi ? » (quota, image, port, volume) : on lit l'état de la ressource, puis les journaux du service
+concerné.
+
+% ---------------------------------------------------------------------
+\subsection*{Les principes qui reviennent partout}
+% ---------------------------------------------------------------------
+
+Au-delà de leurs différences, les services partagent une même manière de fonctionner (tableau~\ref{tab:concl-principes}). La
+reconnaître dans un service inconnu permet de le comprendre vite : on cherche son API, son processus de coordination, ses agents,
+sa base, ses états et ses pilotes. Les bibliothèques \gls{oslo} (configuration, messagerie, accès aux bases, politiques) en sont
+le ciment commun.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{9.0cm}>{\raggedright\arraybackslash}p{3.1cm}@{}}
+\toprule
+\textbf{Principe} & \textbf{En pratique} & \textbf{À revoir} \\
+\midrule
+API REST authentifiée & Chaque appel porte un token de Keystone ; le service le valide et applique sa politique de droits. & Chap.~\ref{chap:keystone} \\
+API, coordination, agents & L'API valide et répond ; un processus de coordination (\emph{conductor}, \emph{engine}, \emph{taskmanager}) décide ; des agents exécutent sur les nœuds. & Chap.~\ref{chap:nova}, \ref{chap:cinder}, \ref{chap:heat}, \ref{chap:ironic}, \ref{chap:trove} \\
+Messagerie interne & Les processus d'un même service s'appellent par RPC sur la file de messages (RabbitMQ) ; d'un service à l'autre, on passe par l'API REST. & Chap.~\ref{chap:nova}, \ref{chap:deploiement} \\
+Une base par service & Chaque service gère son schéma (\texttt{db sync}) ; les autres ne le lisent jamais. & Chap.~\ref{chap:deploiement} \\
+Opérations asynchrones & L'API répond vite ; la ressource passe par des états (\texttt{BUILD} $\to$ \texttt{ACTIVE}, \texttt{creating} $\to$ \texttt{available}) et finit en \texttt{ERROR} s'il y a un échec. & Chap.~\ref{chap:nova}, \ref{chap:cinder}, \ref{chap:magnum} \\
+Quotas et capacité & Chaque service plafonne les \glspl{quota} par projet ; Nova s'appuie sur Placement pour connaître la capacité réelle. & Chap.~\ref{chap:nova}, \ref{chap:placement} \\
+Pilotes et greffons & Le cœur est stable, le variable est dans des pilotes : ML2 (OVS, OVN), backends de Cinder, magasins de Glance, types matériels d'Ironic, pilotes de cluster de Magnum, datastores de Trove. & Chap.~\ref{chap:neutron}, \ref{chap:cinder}, \ref{chap:ironic}, \ref{chap:magnum}, \ref{chap:trove} \\
+Versions d'API négociées & Les \emph{microversions} font évoluer l'API sans casser les clients : le client indique la version qu'il attend (Nova, Placement, Cinder, Ironic). & Chap.~\ref{chap:nova}, \ref{chap:placement} \\
+\bottomrule
+\end{tabular}
+\caption{Huit principes communs aux services d'OpenStack.}
+\label{tab:concl-principes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection*{Diagnostiquer : une méthode commune}
+% ---------------------------------------------------------------------
+
+Les principes précédents donnent aussi une méthode de diagnostic qui vaut pour tous les services (figure~\ref{fig:concl-diag}). On
+part de la ressource en échec, on remonte au service qui la possède, puis on suit la requête dans ses journaux avant d'élargir aux
+dépendances et à l'infrastructure.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    cmd/.style={font=\scriptsize, text width=2.9cm, align=center}]
+  \foreach \x/\t/\c [count=\i] in {1.6/{Lire\\ l'état}/{\texttt{openstack \dots{} show} : \texttt{status}, champ \texttt{fault}},
+        4.9/{Trouver le\\ service}/{à qui appartient la ressource ? (\texttt{endpoint list})},
+        8.2/{Suivre la\\ requête}/{identifiant \texttt{req-\dots} dans les journaux (\texttt{--debug})},
+        11.5/{Vérifier les\\ dépendances}/{quotas, services et agents \texttt{up}, Placement, Glance, Neutron, Cinder},
+        14.8/{Vérifier\\ l'infrastructure}/{RabbitMQ, base de données, horloge (NTP), espace disque}}
+    { \node[pfoc, minimum width=2.9cm, minimum height=1.1cm] (s\i) at (\x,1.6) {\t};
+      \node[num] at (\x-1.25,2.25) {\i};
+      \node[cmd] at (\x,0.35) {\c}; }
+  \foreach \a/\b in {1/2,2/3,3/4,4/5} \draw[fluxr] (s\a.east) -- (s\b.west);
+  \node[callout, minimum width=15.6cm] at (8.2,-1.0)
+    {On élargit le champ pas à pas : la cause est presque toujours dans le service propriétaire ou dans l'une de ses dépendances.};
+\end{tikzpicture}}
+\caption{Cinq temps pour diagnostiquer une ressource en échec, quel que soit le service.}
+\label{fig:concl-diag}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection*{Quel service pour quel besoin}
+% ---------------------------------------------------------------------
+
+Le tableau~\ref{tab:concl-besoins} part du besoin, ce qui est la démarche d'un utilisateur ou d'un architecte.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.5cm}>{\raggedright\arraybackslash}p{3.7cm}>{\raggedright\arraybackslash}p{7.2cm}@{}}
+\toprule
+\textbf{Besoin} & \textbf{Service} & \textbf{À retenir} \\
+\midrule
+Une machine virtuelle & Nova (avec Glance, Neutron, Placement) & Disque racine local, sauf démarrage sur un volume. \\
+Un disque qui survit à la machine & Cinder & Volume attaché à une instance, avec instantanés et sauvegardes. \\
+Des fichiers, des archives, via HTTP & Swift & Indépendant des instances ; réplication ou codage d'effacement. \\
+Réseau, routeur, adresse flottante & Neutron & Réseaux de projet isolés, groupes de sécurité. \\
+Répartir le trafic entre serveurs & Octavia & Répartiteur fourni comme service, rôle des amphores. \\
+Recréer une infrastructure à l'identique & Heat & Un modèle HOT décrit une pile entière. \\
+Une machine physique & Ironic & Livraison de serveurs nus, souvent derrière Nova. \\
+Un cluster Kubernetes & Magnum & Modèle de cluster, pilote Cluster API. \\
+Une base de données managée & Trove & Instance, volume et moteur dans un conteneur. \\
+Une interface web & Horizon & Appelle les API avec les droits de l'utilisateur. \\
+\bottomrule
+\end{tabular}
+\caption{Du besoin au service.}
+\label{tab:concl-besoins}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection*{Mettre en production : une liste de contrôle}
+% ---------------------------------------------------------------------
+
+Les chapitres ont chacun leur section d'exploitation ; en voici l'essentiel, dans l'ordre où l'on s'y heurte (chapitre~\ref{chap:deploiement}) :
+
+\begin{itemize}
+  \item \textbf{Topologie} : au moins trois contrôleurs, adresse virtuelle devant les API, réseaux de gestion, de tunnel et externe
+        séparés.
+  \item \textbf{Sécurité} : TLS sur les API exposées, secrets hors des dépôts et renouvelés, réseau de gestion interne.
+  \item \textbf{Capacité} : \glspl{quota} par projet, gabarits (\emph{flavors}) et images de référence, surveillance de l'occupation des
+        hyperviseurs.
+  \item \textbf{Sauvegardes} : base de données de chaque service, configuration de l'outil de déploiement, volumes
+        (chapitre~\ref{chap:cinder}) ; une restauration répétée au moins une fois.
+  \item \textbf{Supervision} : état des services et des agents, journaux centralisés, alertes.
+  \item \textbf{Pannes} : une procédure pour la perte d'un hyperviseur (évacuation) et pour la perte d'un contrôleur.
+  \item \textbf{Mises à niveau} : un plan par version (versions \gls{slurp}), un environnement d'essai, une sauvegarde avant de
+        commencer.
+\end{itemize}
+
+% ---------------------------------------------------------------------
+\subsection*{Limites, alternatives et évolutions}
+% ---------------------------------------------------------------------
+
+\textbf{Limites.} OpenStack est puissant, mais il se paie en exploitation : de nombreux processus à superviser, un cycle de mise à
+niveau tous les six mois, une documentation répartie projet par projet, une courbe d'apprentissage réelle. Cet effort se justifie
+quand l'organisation en retire un bénéfice net (voir le tableau~\ref{tab:concl-alternatives}) ; il ne se justifie pas pour quelques
+machines.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.25}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.4cm}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{4.1cm}@{}}
+\toprule
+\textbf{Critère} & \textbf{OpenStack (cloud privé)} & \textbf{Cloud public} & \textbf{Kubernetes seul} \\
+\midrule
+Ce qui est fourni & Machines, réseaux, volumes, objets, quelques services managés & Idem, avec un catalogue de services managés bien plus large & Conteneurs et leur réseau, sur des machines déjà disponibles \\
+Maîtrise & Totale : matériel, données, versions & Encadrée par le contrat du fournisseur & Celle de l'infrastructure sous-jacente \\
+Exploitation & À votre charge (chapitre~\ref{chap:deploiement}) & Assurée par le fournisseur & À votre charge, plus légère \\
+Élasticité & Bornée par le matériel acheté & Quasi illimitée, à la demande & Bornée par les nœuds \\
+Plutôt si\dots & Charge stable, souveraineté, machines physiques, équipe d'exploitation & Charge variable, démarrage rapide, peu d'équipe infrastructure & Applications déjà conteneurisées \\
+\bottomrule
+\end{tabular}
+\caption{Trois façons de se procurer des ressources d'infrastructure (tendances générales, non des règles).}
+\label{tab:concl-alternatives}
+\end{table}
+
+\textbf{Alternatives.} OpenStack et Kubernetes ne s'excluent pas, ils se complètent : Kubernetes orchestre des conteneurs sur des
+machines, OpenStack fournit ces machines, leurs réseaux et leurs disques. Les deux sens de la combinaison existent. Magnum
+(chapitre~\ref{chap:magnum}) fournit des clusters Kubernetes \emph{sur} OpenStack ; OpenStack-Helm, Sunbeam et RHOSO déploient OpenStack
+\emph{sur} Kubernetes (section~\ref{sec:dep-autres}).
+
+\textbf{Évolutions.} Quelques mouvements sont visibles dans le cours même :
+\begin{itemize}
+  \item un rythme de publication semestriel, avec des versions \gls{slurp} pour ceux qui ne mettent à niveau qu'une fois par an
+        \parencite{openstack-releases,openstack-slurp} ;
+  \item le départ de certains outils : TripleO est retiré, Swift n'est plus déployé par Kolla-Ansible (section~\ref{sec:dep-kolla}) ;
+  \item le rapprochement avec Kubernetes, par le déploiement (Helm, Sunbeam, RHOSO) et par les services (pilotes Cluster API de Magnum,
+        opérateurs de bases de données comme alternative à Trove) ;
+  \item un cadre institutionnel nouveau : l'OpenInfra Foundation a rejoint la Linux Foundation le 3~juin 2025, tandis que
+        OpenStack garde sa gouvernance communautaire \parencite{openinfra-lf}.
+\end{itemize}
+
+% ---------------------------------------------------------------------
+\subsection*{Ce que le cours n'a pas couvert}
+% ---------------------------------------------------------------------
+
+OpenStack compte bien plus de projets officiels que les quinze chapitres \parencite{governance-projects}. Le tableau~\ref{tab:concl-autres}
+en cite quelques-uns, qui complètent naturellement les services vus.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.2}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.5cm}>{\raggedright\arraybackslash}p{5.8cm}>{\raggedright\arraybackslash}p{7.1cm}@{}}
+\toprule
+\textbf{Projet} & \textbf{Rôle (selon le registre officiel)} & \textbf{Lien avec le cours} \\
+\midrule
+Barbican & Gestionnaire de clés & Certificats des clusters de Magnum \\
+Designate & Service DNS & Noms de domaine pour les instances et les adresses flottantes \\
+Manila & Systèmes de fichiers partagés & Complète Cinder (blocs) et Swift (objets) \\
+Skyline & Tableau de bord & Alternative à Horizon \\
+Telemetry & Service de télémétrie & Mesures de l'usage des ressources, base de la supervision et de la facturation \\
+Masakari & Haute disponibilité des instances & Relance des instances d'un hôte tombé (complète l'évacuation manuelle) \\
+Watcher & Optimisation de l'infrastructure & Répartition de la charge entre hyperviseurs \\
+Blazar & Réservation de ressources & Réserver des machines pour une période \\
+Cyborg & Gestion du cycle de vie des accélérateurs & Accélérateurs matériels (GPU, FPGA) mis à disposition des instances \\
+Tacker & Orchestration NFV & Fonctions réseau virtualisées, notamment chez les opérateurs de télécoms \\
+CloudKitty & Service de tarification (\emph{rating}) & Facturation à partir des mesures \\
+Zun & Service de conteneurs & Lancer des conteneurs sans passer par un cluster Kubernetes \\
+\bottomrule
+\end{tabular}
+\caption{Quelques projets officiels non étudiés. Les rôles reprennent les descriptions du registre ; la colonne de droite est une lecture
+d'enseignement, non une affirmation du registre.}
+\label{tab:concl-autres}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection*{Pour aller plus loin}
+% ---------------------------------------------------------------------
+
+\begin{itemize}
+  \item \textbf{Pratiquer} : installer DevStack ou Sunbeam sur une machine jetable (chapitre~\ref{chap:deploiement}), puis refaire le
+        scénario de la figure~\ref{fig:concl-seq}, écrire un modèle Heat, ouvrir un répartiteur Octavia. Lire un journal de service
+        vaut tous les schémas.
+  \item \textbf{Lire} : la documentation officielle de chaque projet, le guide d'installation et le guide de haute disponibilité
+        \parencite{install-guide,ha-guide}.
+  \item \textbf{Se certifier} : l'examen COA (\emph{Certified OpenStack Administrator}) dure trois heures et se passe en ligne,
+        sur des tâches réalisées en ligne de commande et dans Horizon ; sa page indique qu'il repose sur la version Caracal, plus
+        ancienne que celles du cours, et conseille six mois d'expérience préalable \parencite{coa}.
+  \item \textbf{Contribuer} : le guide du contributeur couvre le code, la documentation, les traductions et les retours
+        d'opérateurs \parencite{openstack-contributors}.
+\end{itemize}
+
+% ---------------------------------------------------------------------
+\subsection*{Messages clés}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item OpenStack est une famille de services indépendants, qui partagent une identité (Keystone), une infrastructure (base,
+        messagerie, cache) et des conventions communes.
+  \item Une action de l'utilisateur traverse plusieurs services par leurs API REST ; elle est asynchrone, et ses états disent où
+        elle en est.
+  \item Chaque service suit le même plan : API, coordination, agents, base, pilotes ; comprendre l'un aide à comprendre les autres.
+  \item Le choix de l'outil de déploiement structure l'exploitation : Kolla-Ansible ou OpenStack-Ansible en production, DevStack pour
+        apprendre et développer.
+  \item Un cloud en production demande de l'exploitation : haute disponibilité, TLS, sauvegardes, supervision, mises à niveau.
+  \item OpenStack complète le cloud public et Kubernetes plus qu'il ne les remplace : le bon choix dépend de la charge, de la
+        maîtrise voulue et de l'équipe disponible.
+\end{itemize}
+\end{aretenir}
+
+Reste à pratiquer : un cloud se comprend d'abord en le faisant tourner.

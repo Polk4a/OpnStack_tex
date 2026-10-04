@@ -5,12 +5,12 @@ Structure LaTeX d'un cours sur OpenStack, basée sur le template INSA CVL
 glossaire, bibliographie biblatex/APA. **Un chapitre = un fichier `chap_<nom>.tex`.**
 **Avancement :** introduction/présentation (squelette), **Keystone** (complet, ~39 pages),
 **Nova** (8 pages), **Placement** (7 pages), **Glance** (7 pages), **Neutron** (8 pages),
-**Cinder** (9 pages), **Horizon** (9 pages), **Octavia** (9 pages), **Swift** (8 pages), **Heat** (9 pages)
-**Ironic** (10 pages), **Magnum** (9 pages) et **Trove** (12 pages) rédigés. Les chapitres restants
-(déploiement) et la conclusion sont encore vides (titre + `\label`) ; ils seront rédigés selon les
-mêmes règles (voir « Conventions des chapitres rédigés »). Keystone est le chapitre « exhaustif » ;
-les suivants sont plus synthétiques (10 pages au plus, schémas conservés) ; Trove, plus détaillé
-(sauvegardes, réplication, sécurité), peut aller jusqu'à 15 pages.
+**Cinder** (9 pages), **Horizon** (9 pages), **Octavia** (9 pages), **Swift** (8 pages), **Heat** (9 pages),
+**Ironic** (10 pages), **Magnum** (9 pages), **Trove** (12 pages), **Méthodes de déploiement** (14 pages) et la
+**conclusion** (6 pages) rédigés. Il ne reste que la présentation générale (squelette), à compléter selon
+les mêmes règles (voir « Conventions des chapitres rédigés »). Keystone est le chapitre « exhaustif » ;
+les suivants sont plus synthétiques (10 pages au plus, schémas conservés) ; Trove et le déploiement, plus
+détaillés, peuvent aller jusqu'à 15 pages ; la conclusion, jusqu'à 10.
 
 ## Compilation
 
@@ -31,7 +31,7 @@ la compilation échoue sans lui).
 - `I do not know the key '/tikz/pcli'` : `main.tex` est une ancienne copie, sans le second
   `\tikzset{…}` (styles de schémas). Utiliser le `main.tex` du projet.
 - `Undefined control sequence \seqmsg` (ou `\seqrep`) : les chapitres Nova, Placement, Neutron,
-  Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum et Trove tracent leurs diagrammes de séquence avec ces deux macros, définies dans `main.tex` juste après
+  Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum, Trove et la conclusion tracent leurs diagrammes de séquence avec ces deux macros, définies dans `main.tex` juste après
   le second `\tikzset`. Si elles manquent, les ajouter :
 
 ```latex
@@ -66,10 +66,10 @@ chap_heat.tex         11. Heat : orchestration  (RÉDIGÉ, 9 pages)
 chap_ironic.tex       12. Ironic : bare metal  (RÉDIGÉ, 10 pages)
 chap_magnum.tex       13. Magnum : Kubernetes managé  (RÉDIGÉ, 9 pages)
 chap_trove.tex        14. Trove : bases de données (DBaaS)  (RÉDIGÉ, 12 pages)
-chap_deploiement.tex  15. Méthodes de déploiement (hors service)
-conclusion.tex        Conclusion (non numérotée, vide)
-glossaire.tex         Entrées du glossaire (143 entrées : Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum, Trove)
-sources.bib           Bibliographie (192 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum, Trove)
+chap_deploiement.tex  15. Méthodes de déploiement  (RÉDIGÉ, 14 pages)
+conclusion.tex        Conclusion (non numérotée)  (RÉDIGÉE, 6 pages)
+glossaire.tex         Entrées du glossaire (169 entrées : Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum, Trove, déploiement et conclusion)
+sources.bib           Bibliographie (248 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum, Trove, déploiement et conclusion)
 images/               logo_insa.png à y déposer
 ```
 
@@ -92,7 +92,8 @@ pour réordonner ou retirer un chapitre, déplacer ou supprimer une ligne.
 | Ironic (rédigé) | Chapitre 5 partie 2 ; le reste vient de la documentation officielle d'Ironic |
 | Magnum (rédigé) | Chapitre 5 partie 3 ; le reste vient de la documentation officielle de Magnum et de magnum-capi-helm |
 | Trove (rédigé) | Chapitre 5 partie 4 ; présentation Trove (groupe 5) ; le reste vient de la documentation officielle de Trove |
-| Déploiement | Chapitre 4 (DevStack, Kolla-Ansible, manuel/bare-metal) |
+| Déploiement (rédigé) | Chapitre 4 (DevStack, Kolla-Ansible, manuel/bare-metal) ; le reste vient de la documentation officielle de DevStack, Kolla, Kolla-Ansible, OpenStack-Ansible, OpenStack-Helm, du guide d'installation, du guide de haute disponibilité et de la résolution SLURP |
+| Conclusion (rédigée) | Les chapitres du cours ; registre des projets officiels, annonce OpenInfra/Linux Foundation, page de l'examen COA, guide du contributeur |
 
 ## Outils du template
 
@@ -130,7 +131,9 @@ macros `\seqmsg{x1}{x2}{y}{num}{texte}` (requête, flèche pleine) et `\seqrep{x
 (réponse, flèche pointillée). Exemple complet : figure « Connexion fédérée par navigateur » dans
 `chap_keystone.tex`.
 
-Règles TikZ à connaître : ne pas mettre `\\` dans un groupe `{}` imbriqué d'un nœud
+Règles TikZ à connaître : ne pas nommer un style `cap` (clé existante de TikZ, « line cap » : erreur
+« requires a value ») ; ne pas ajouter `!80!black` à une couleur qui contient déjà un `!` (`insarouge!45`) ;
+ne pas mettre `\\` dans un groupe `{}` imbriqué d'un nœud
 `align=center` ; préférer un nœud explicite (`\node[etiqf] at (x,y) {…}`) à `node` placé après la
 destination d'un `to[...]` (le nœud se retrouve alors sur la destination, pas sur la courbe).
 
@@ -154,7 +157,7 @@ un paragraphe qui déborde à cause de noms de fichiers ou de sections en `\text
 
 - Un chapitre = une `\section{…}\label{chap:<nom>}` ; sous-sections `sec:<nom>-<sujet>`,
   figures `fig:<nom>-…`, tableaux `tab:<nom>-…`, exercices `ex:<nom>-…`.
-- Chapitres synthétiques (Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum et suivants) : 10 pages au plus (Trove, chapitre plus détaillé : 15 au plus) ; mêmes sections, mais
+- Chapitres synthétiques (Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Heat, Ironic, Magnum et suivants) : 10 pages au plus (Trove et déploiement, chapitres plus détaillés : 15 au plus ; conclusion : 10 au plus) ; mêmes sections, mais
   une figure par idée clé (environnement, architecture, séquence, ordonnancement/états), 3 exercices
   courts et un récapitulatif sans schéma de synthèse.
 - Contenu type : rôle du service et place dans OpenStack (schéma structure + interactions) ;
@@ -170,7 +173,32 @@ un paragraphe qui déborde à cause de noms de fichiers ou de sections en `\text
   (fichier `sources.bib`). Les entrées `@online` portent `urldate` ; faute de date de
   publication, biblatex-apa affiche « s. d.-a », « s. d.-b »… (comportement normal d'APA pour
   plusieurs documents du même auteur sans date).
-- Glossaire : un terme est défini dans `glossaire.tex` puis cité avec `\gls{…}`.
+- Glossaire : un terme est défini dans `glossaire.tex` puis cité avec `\gls{…}` (`\glspl{…}` pour le
+  pluriel). Les clés propres au déploiement : `slurp`, `quorum`, `ansible`, `playbook`, `inventaireansible`
+  (et non `inventaire`, qui est celui de Placement), `devstack`, `kolla`, `kollaansible`, `kayobe`,
+  `openstackansible`, `openstackhelm`, `lxc`, `venv`, `registre`, `galera`, `rabbitmq`, `keepalived`,
+  `aio`, `ceph`, `ntp`, etc.
+- Chapitre « Déploiement » : labels préfixés `dep-` (`sec:dep-kolla`, `fig:dep-topo`, `tab:dep-outils`,
+  `ex:dep-choix`). Il décrit les versions en vigueur début octobre 2026 (2026.2 *Hibiscus* sortie le
+  30 septembre 2026) : à chaque nouvelle version, revoir les branches `stable/2026.x` des commandes
+  (sections 15.5 et 15.10), les systèmes pris en charge, les versions de Kubernetes d'OpenStack-Helm
+  (tableau 15.3) et les noms de versions (figure 15.10, en fin de section 15.10).
+- Conclusion : `\section*`, donc sans numéro de chapitre ; elle remet à zéro les compteurs de figures
+  et de tableaux (`C.1`, `C.2`…) au début de `conclusion.tex`.
+
+## Écarts entre le chapitre Déploiement et le support de cours (Chapitre 4)
+
+Le chapitre suit la documentation officielle quand elle contredit le support :
+
+- **TripleO** est retiré du projet (dépôt archivé en 2024) ; il n'est plus présenté comme une méthode
+  de déploiement actuelle (Red Hat déploie aujourd'hui par des opérateurs sur OpenShift, RHOSO).
+- **Kolla-Ansible** : les images publiées sur Quay.io sont destinées aux essais, pas à la production
+  (construire ses propres images avec `kolla-build` et un registre local) ; Swift n'est plus déployé ;
+  Ceph n'est pas déployé (seulement connecté) ; la documentation ne décrit pas de retour arrière après
+  une mise à niveau.
+- **DevStack** : Swift n'est pas activé par défaut ; l'installation se fait sous un compte `stack`
+  dédié, pas en `root`.
+- **« Bare metal »** : le terme recouvre deux sens, distingués dans une remarque de la section 15.7.
 
 ## Réglages ajoutés au préambule
 
