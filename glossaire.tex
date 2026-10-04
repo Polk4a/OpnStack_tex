@@ -150,7 +150,7 @@
   description={Groupe de nœuds de calcul que l'utilisateur peut viser à la création d'une instance (par exemple une salle ou une baie) ; c'est un agrégat d'hôtes visible des utilisateurs}}
 
 \newglossaryentry{fournisseur}{name={fournisseur de ressources (resource provider)}, sort={fournisseur de ressources}, text={fournisseur de ressources},
-  description={Entité de Placement qui offre un inventaire de ressources consommables : un nœud de calcul, un pool de stockage partagé, etc.}}
+  description={Entité de Placement qui offre un inventaire de ressources consommables, par exemple un nœud de calcul ou un pool de stockage partagé}}
 
 \newglossaryentry{inventaire}{name={inventaire}, sort={inventaire},
   description={Quantité d'une classe de ressources offerte par un fournisseur : total, réservé, ratio d'allocation, taille minimale, maximale et pas d'allocation}}
@@ -316,3 +316,65 @@
 
 \newglossaryentry{politiquestockage}{name={politique de stockage (storage policy)}, sort={politique de stockage}, text={politique de stockage}, plural={politiques de stockage},
   description={Choix, par conteneur, d'un ring d'objets et donc du nombre de répliques, du type de disques ou du codage d'effacement}}
+
+% ---- Heat -------------------------------------------------------------
+\newglossaryentry{modeleheat}{name={modèle (template)}, sort={modele}, text={modèle}, plural={modèles},
+  description={Fichier qui décrit l'infrastructure voulue (ressources, paramètres, sorties) ; Heat le lit pour créer une stack. Son format natif est HOT, en YAML}}
+
+\newglossaryentry{stack}{name={stack}, sort={stack}, plural={stacks},
+  description={Ensemble de ressources créé par Heat à partir d'un modèle ; c'est l'unité qu'on crée, met à jour et supprime}}
+
+\newglossaryentry{ressourceheat}{name={ressource (Heat)}, sort={ressource}, text={ressource}, plural={ressources},
+  description={Élément d'infrastructure d'une stack (réseau, serveur, volume\dots), instancié d'après un type de la forme \texttt{OS::Service::Type}}}
+
+\newglossaryentry{hot}{name={HOT (Heat Orchestration Template)}, sort={HOT}, text={HOT},
+  description={Format de modèle natif de Heat, écrit en YAML ; sa version (\texttt{heat\_template\_version}) détermine les fonctions disponibles}}
+
+\newglossaryentry{environnementheat}{name={environnement (Heat)}, sort={environnement}, text={environnement},
+  description={Fichier passé avec \texttt{-e} qui fournit des valeurs de paramètres et peut remplacer des types de ressources (\texttt{resource\_registry})}}
+
+\newglossaryentry{graphedeps}{name={graphe de dépendances}, sort={graphe de dependances}, text={graphe de dépendances},
+  description={Graphe orienté que Heat construit à partir des références entre ressources ; il fixe l'ordre de création, et la suppression suit l'ordre inverse}}
+
+% ---- Ironic -----------------------------------------------------------
+\newglossaryentry{baremetal}{name={bare metal}, sort={bare metal}, text={bare metal},
+  description={Serveur physique utilisé directement par un seul locataire, sans hyperviseur ; Ironic le provisionne et Nova le présente comme une instance}}
+
+\newglossaryentry{noeudironic}{name={nœud (Ironic)}, sort={noeud (Ironic)}, text={nœud}, plural={nœuds},
+  description={Enregistrement d'Ironic qui représente un serveur physique : son type de matériel, ses identifiants de gestion, ses ports, sa classe de ressources et son état de provisionnement}}
+
+\newglossaryentry{portironic}{name={port (Ironic)}, sort={port (Ironic)}, text={port}, plural={ports},
+  description={Carte réseau d'un nœud, déclarée dans Ironic par son adresse MAC ; à ne pas confondre avec le port Neutron, qui lui est lié lors du raccordement au réseau}}
+
+\newglossaryentry{conductorironic}{name={conductor (Ironic)}, sort={conductor (Ironic)}, text={conductor}, plural={conductors},
+  description={Composant d'Ironic (\texttt{ironic-conductor}) qui agit sur les serveurs physiques : alimentation, déploiement, nettoyage, inspection ; chaque conductor gère une partie des nœuds}}
+
+\newglossaryentry{bmc}{name={BMC (contrôleur de gestion)}, sort={BMC}, text={BMC},
+  description={\emph{Baseboard Management Controller} : contrôleur intégré au serveur, doté de sa propre adresse réseau ; il reçoit les ordres d'alimentation et de démarrage (IPMI, Redfish)}}
+
+\newglossaryentry{ipmi}{name={IPMI}, sort={IPMI}, text={IPMI},
+  description={\emph{Intelligent Platform Management Interface} : protocole ancien de gestion à distance par le BMC (alimentation, périphérique de démarrage) ; Ironic l'utilise avec la commande \texttt{ipmitool}}}
+
+\newglossaryentry{redfish}{name={Redfish}, sort={Redfish}, text={Redfish},
+  description={Protocole de gestion à distance des serveurs par API REST, proposé par le BMC ; Ironic l'utilise avec le type de matériel \texttt{redfish}}}
+
+\newglossaryentry{pxe}{name={PXE (démarrage par le réseau)}, sort={PXE}, text={PXE},
+  description={\emph{Preboot Execution Environment} : démarrage par le réseau, où un serveur DHCP indique au serveur le programme à charger et un serveur TFTP (ou HTTP) le fournit ; iPXE en est une variante}}
+
+\newglossaryentry{ipa}{name={IPA (Ironic Python Agent)}, sort={IPA}, text={IPA},
+  description={Agent Python qui s'exécute dans un ramdisk sur le serveur : il donne au conductor un accès à distance et réalise de l'intérieur l'écriture de l'image, le nettoyage et l'inspection}}
+
+\newglossaryentry{hardwaretype}{name={type de matériel (hardware type)}, sort={type de materiel}, text={type de matériel}, plural={types de matériel},
+  description={Ensemble d'interfaces matérielles qui définit comment Ironic pilote une famille de serveurs (\texttt{ipmi}, \texttt{redfish} ou un type propre à un constructeur) ; on parle aussi de pilote (\emph{driver})}}
+
+\newglossaryentry{interfacemat}{name={interface matérielle (hardware interface)}, sort={interface materielle}, text={interface matérielle}, plural={interfaces matérielles},
+  description={Brique d'un type de matériel qui gère un aspect du serveur : alimentation, démarrage, déploiement, réseau, inspection, RAID\dots}}
+
+\newglossaryentry{nettoyage}{name={nettoyage (cleaning)}, sort={nettoyage}, text={nettoyage},
+  description={Étapes qu'Ironic exécute sur un nœud entre deux locataires, ou avant le premier : effacement des disques, remise du matériel dans une configuration connue ; l'état \texttt{cleaning} les regroupe}}
+
+\newglossaryentry{ramdisk}{name={ramdisk de déploiement}, sort={ramdisk}, text={ramdisk},
+  description={Petit système Linux chargé en mémoire par démarrage réseau, qui exécute l'agent IPA pour déployer, nettoyer ou inspecter un nœud}}
+
+\newglossaryentry{etatprov}{name={état de provisionnement (provision state)}, sort={etat de provisionnement}, text={état de provisionnement}, plural={états de provisionnement},
+  description={Étape du cycle de vie d'un nœud dans la machine à états d'Ironic (\texttt{enroll}, \texttt{manageable}, \texttt{available}, \texttt{active}\dots)}}

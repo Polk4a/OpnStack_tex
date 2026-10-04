@@ -2,10 +2,604 @@
 %  Chapitre « Ironic : le bare metal en tant que service »
 %  Fichier importé par main.tex avec \include{chap_ironic}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Services avancés » (chapitre 5, partie 2) et
+%  documentation officielle d'Ironic (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Ironic : le bare metal en tant que service}\label{chap:ironic}
+% =====================================================================
+
+Ironic fait des serveurs physiques une ressource du cloud : on les enregistre, puis on les attribue comme des instances.
+Ce chapitre présente son rôle, ses concepts (nœud, port, type de matériel, classe de ressources), son architecture, la machine
+à états d'un nœud, l'enrôlement et le déploiement, le nettoyage entre deux locataires, le réseau et la mise en œuvre \parencite{ironic-index}.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place d'Ironic}\label{sec:ir-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Ironic}
+Ironic est le service Bare Metal d'OpenStack. Il provisionne des serveurs \gls{baremetal}, c'est-à-dire des machines physiques
+dédiées à un seul utilisateur, sans hyperviseur : il gère leur inventaire, leur alimentation, leur démarrage par le réseau,
+l'écriture d'une image sur leur disque et leur remise en état. Avec Nova, il présente un serveur physique comme une instance
+\parencite{ironic-overview}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Certaines charges ne s'accommodent pas d'un hyperviseur : calcul haute performance, accès à du
+        matériel qu'on ne sait pas virtualiser, bases de données, exigences d'isolation ou de matériel dédié, ou déploiement du
+        cloud lui-même \parencite{ironic-overview}.
+  \item \textbf{Communique avec.} Keystone (authentification), Nova (API utilisateur et ordonnancement), Glance (images),
+        Neutron (DHCP et réseaux) et Swift (stockage temporaire de l'image, du \emph{config drive} et des journaux)
+        \parencite{ironic-overview}.
+  \item \textbf{Exemple.} pour l'utilisateur, une instance bare metal se commande comme une machine virtuelle :
+\begin{lstlisting}[style=terminal]
+$ openstack server create --flavor baremetal-gpu --image ubuntu \
+    --network provider bm-instance
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,7.6) {Utilisateur \ $\cdot$ \ CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[psvc, minimum width=3.0cm] (no) at (6.4,5.7) {Nova};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (ir) at (6.4,3.4)
+    {Ironic\\ {\scriptsize\mdseries bare metal}};
+  \node[pdat, minimum width=8.6cm] (sv) at (6.4,0.4) {Serveur physique : BMC, cartes réseau, disques};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,3.4) {Keystone};
+  \node[psvc, minimum width=2.6cm] (gl) at (11.9,5.4) {Glance};
+  \node[psvc, minimum width=2.6cm] (ne) at (11.9,3.4) {Neutron};
+  \node[psvc, minimum width=2.6cm] (sw) at (11.9,1.4) {Swift};
+  \draw[fluxr] (cli) -- (no)
+    node[num, pos=0.35] {1} node[etiqf, midway, right=4mm] {\texttt{server create}};
+  \draw[fluxr] (no) -- (ir.north)
+    node[num, pos=0.3] {2} node[etiqf, midway, left=4mm] {demande de déploiement};
+  \draw[fluxr] (ir.south) -- (sv.north)
+    node[num, pos=0.4] {3} node[etiqf, midway, left=4mm] {alimentation, démarrage, image};
+  \draw[fluxo] (ir.west) -- (ks.east)
+    node[etiqf, pos=0.5, above=2pt] {token};
+  \draw[fluxo] (ir.east) -- (gl.west)
+    node[etiqf, pos=0.55, above=2pt] {images};
+  \draw[fluxo] (ir.east) -- (ne.west)
+    node[etiqf, pos=0.5, above=2pt] {DHCP, réseaux};
+  \draw[fluxo] (ir.east) -- (sw.west)
+    node[etiqf, pos=0.6, below=2pt] {stockage temporaire};
+  \node[callout, minimum width=13.4cm] at (6.4,-1.0)
+    {Ironic se commande par Nova, comme une machine virtuelle ; il pilote le matériel lui-même.};
+\end{tikzpicture}}
+\caption{Ironic et ses voisins. L'utilisateur commande une instance à Nova (1) qui, ayant choisi un serveur physique, demande
+son déploiement à Ironic (2). Ironic appelle les autres services et pilote le serveur (3).}
+\label{fig:ir-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : nœud, port, type de matériel, classe}\label{sec:ir-concepts}
+% ---------------------------------------------------------------------
+
+Ironic décrit un serveur physique par un \gls{noeudironic}, auquel on rattache des ports et des interfaces matérielles. Le
+tableau~\ref{tab:ir-objets} donne le vocabulaire ; le tableau~\ref{tab:ir-vm} compare une instance bare metal à une machine
+virtuelle de Nova.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{8.2cm}>{\raggedright\arraybackslash\ttfamily\small}p{4.1cm}@{}}
+\toprule
+\textbf{Terme} & \textbf{Rôle} & \textrm{\textbf{Exemple}} \\
+\midrule
+\Gls{noeudironic} & Serveur physique enregistré : son type de matériel, ses identifiants de gestion, son état. Désigné par un UUID ou un nom. & gpu-node-01 \\
+\Gls{portironic} & Carte réseau du nœud, déclarée par son adresse MAC ; elle sert à raccorder le nœud au réseau. & AA:BB:CC:DD:EE:01 \\
+\Gls{hardwaretype} & Famille de matériel : il fixe la façon de piloter le serveur à distance. & ipmi, redfish \\
+\Gls{interfacemat} & Brique d'un type de matériel, qui gère un aspect (alimentation, démarrage, déploiement, réseau\dots). & power, boot, deploy \\
+\Gls{classeressources} & Étiquette d'un modèle de matériel ; elle relie le nœud au flavor demandé. & baremetal-gpu \\
+\Gls{trait} & Attribut qualitatif d'un nœud, exposé à Placement. & HW\_CPU\_X86\_VMX \\
+\Gls{etatprov} & Étape du cycle de vie du nœud (section~\ref{sec:ir-etats}). & available \\
+\bottomrule
+\end{tabular}
+\caption{Le vocabulaire d'Ironic \parencite{ironic-enrollment,ironic-drivers}.}
+\label{tab:ir-objets}
+\end{table}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.8cm}>{\raggedright\arraybackslash}p{5.9cm}>{\raggedright\arraybackslash}p{6.8cm}@{}}
+\toprule
+\textbf{Critère} & \textbf{Instance Nova (machine virtuelle)} & \textbf{Instance Ironic (bare metal)} \\
+\midrule
+Machine hôte & Un hyperviseur partage le serveur entre plusieurs instances. & Un serveur physique entier est dédié à une instance. \\
+Isolation & Assurée par l'hyperviseur. & Assurée par le matériel : un seul locataire à la fois. \\
+Ressource demandée & VCPU, mémoire et disque du flavor. & Une unité d'une classe de ressources personnalisée. \\
+Démarrage & L'hyperviseur crée la machine à partir de l'image. & Le serveur démarre un ramdisk par le réseau, qui écrit l'image sur son disque : deux cycles d'alimentation. \\
+Fin de vie & La machine virtuelle est supprimée. & Le serveur est nettoyé (disques effacés) avant d'être attribué à nouveau. \\
+Réseau & Port virtuel d'un réseau Neutron. & Port Neutron lié à la carte réseau physique ; les commutateurs peuvent être reprogrammés. \\
+\bottomrule
+\end{tabular}
+\caption{Instance virtuelle et instance bare metal \parencite{ironic-overview,ironic-nova-flavors,ironic-networking}.}
+\label{tab:ir-vm}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Architecture}\label{sec:ir-archi}
+% ---------------------------------------------------------------------
+
+Ironic se compose d'une API, d'un ou plusieurs conductors et d'un agent qui s'exécute sur le serveur lui-même
+(tableau~\ref{tab:ir-composants} et figure~\ref{fig:ir-archi}). L'API transmet les requêtes au \gls{conductorironic} par RPC ;
+c'est lui qui agit sur le matériel, au moyen de pilotes \parencite{ironic-overview}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.6cm}>{\raggedright\arraybackslash}p{9.6cm}>{\raggedright\arraybackslash}p{2.3cm}@{}}
+\toprule
+\textrm{\textbf{Composant}} & \textbf{Rôle} & \textbf{Port} \\
+\midrule
+ironic-api & API REST ; transmet les requêtes au conductor par RPC. Peut tourner en WSGI. & 6385 \\
+ironic-conductor & Ajoute, modifie, supprime les nœuds ; les allume et les éteint ; les déploie et les nettoie, au moyen de pilotes. & \\
+ironic-python-agent & Agent \gls{ipa}, exécuté dans un \gls{ramdisk} temporaire sur le serveur : accès à distance pour le conductor, commandes matérielles et inspection de l'intérieur. & 9999 \\
+ironic-novncproxy & Mandataire des consoles graphiques (NoVNC). & \\
+\bottomrule
+\end{tabular}
+\caption{Les composants d'Ironic et leurs ports par défaut \parencite{ironic-overview,ironic-identity,ironic-tenant-networks}.}
+\label{tab:ir-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.4cm] (cl) at (1.2,4.6) {Clients\\ {\scriptsize\mdseries CLI, Horizon, Nova}};
+  \node[pfoc, minimum width=3.2cm] (api) at (5.6,4.6) {ironic-api\\ {\scriptsize\mdseries API REST, port 6385}};
+  \node[pgris, minimum width=2.2cm, minimum height=3.4cm] (bus) at (9.4,4.6) {File de\\ messages\\ {\scriptsize\mdseries AMQP}};
+  \node[pfoc, minimum width=3.4cm] (c1) at (13.4,5.8) {ironic-conductor};
+  \node[psvc, minimum width=3.4cm] (c2) at (13.4,3.4) {ironic-conductor};
+  \node[pgris, minimum width=3.0cm] (db) at (1.4,0.5) {Base de données};
+  \node[pdat, minimum width=4.4cm] (sv) at (13.4,0.5) {Serveur physique\\ {\scriptsize\mdseries BMC ; ramdisk avec l'agent IPA}};
+  \draw[fluxr] (cl.east) -- (api.west) node[num, pos=0.3, above=3pt] {1};
+  \draw[fluxo] (api.east) -- (api.east -| bus.west) node[num, pos=0.5, above=3pt] {2};
+  \draw[fluxo] (bus.east |- c1.west) -- (c1.west);
+  \draw[fluxo] (bus.east |- c2.west) -- (c2.west);
+  \draw[fluxr] (c2.south) -- (c2.south |- sv.north) node[num, pos=0.5, right=4pt] {3};
+  \node[etiqf] at (10.6,1.9) {BMC : IPMI, Redfish\\ démarrage : DHCP, TFTP};
+  \draw[fluxd] (sv.west) -| (api.south) node[num, pos=0.75, right=4pt] {4};
+  \node[etiqf] at (8.2,0.9) {rappel de l'agent};
+  \draw[fluxd] (db.north east) -- (api.south west);
+  \node[etiqf] at (3.3,2.3) {état des nœuds};
+  \node[callout, minimum width=15.4cm] at (7.4,-1.0)
+    {On ajoute des conductors quand le nombre de nœuds croît : chacun gère une partie des nœuds.};
+\end{tikzpicture}}
+\caption{Architecture d'Ironic. Les clients appellent l'API (1), qui transmet la requête à un conductor par la file de messages
+(2). Le conductor agit sur le serveur par son BMC et le fait démarrer par le réseau (3) ; l'agent IPA rappelle ensuite
+l'API (4). L'API et les conductors partagent la base de données.}
+\label{fig:ir-archi}
+\end{figure}
+
+Comme les autres services, Ironic utilise une base de données et une file de messages compatible \texttt{oslo.messaging}
+(RabbitMQ) pour le RPC entre l'API et les conductors ; un transport JSON-RPC peut remplacer la file
+(\texttt{rpc\_\allowbreak transport = json-rpc}) \parencite{ironic-overview,ironic-install}. Chaque conductor gère une partie des
+nœuds, distribuée par un anneau de hachage (\emph{hash ring}) ; il en surveille régulièrement l'alimentation, doit joindre le
+contrôleur de gestion (\gls{bmc}) de chacun et fournit, par TFTP ou HTTP, le noyau et le ramdisk de démarrage
+\parencite{ironic-refarch}. Tous les conductors doivent être à la même version \parencite{ironic-install}.
+
+Le conductor agit sur le matériel par des pilotes. Un \gls{hardwaretype} assemble des \glspl{interfacemat}, une par aspect
+du serveur (tableau~\ref{tab:ir-interfaces}). Les types génériques sont \texttt{ipmi} et \texttt{redfish} (\gls{ipmi},
+\gls{redfish}) ; certains constructeurs en ont d'autres. On les active dans la configuration du conductor
+(\texttt{enabled\_\allowbreak hardware\_\allowbreak types}) et chaque nœud choisit son type à sa création
+\parencite{ironic-drivers}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{2.6cm}>{\raggedright\arraybackslash}p{8.4cm}>{\raggedright\arraybackslash\ttfamily\small}p{4.5cm}@{}}
+\toprule
+\textrm{\textbf{Interface}} & \textbf{Rôle} & \textrm{\textbf{Valeurs courantes}} \\
+\midrule
+power & Allume, éteint, redémarre le serveur. & ipmitool, redfish \\
+management & Choisit le périphérique de démarrage ; autres actions de gestion. & ipmitool, redfish \\
+boot & Démarre le ramdisk de déploiement, puis le système de l'utilisateur. & pxe, ipxe \\
+deploy & Définit comment l'image arrive sur le disque. & direct, ramdisk \\
+network & Raccorde le nœud aux réseaux virtuels. & noop, flat, neutron \\
+inspect & Relève les caractéristiques matérielles. & agent \\
+raid & Construit ou défait une grappe RAID. & agent, no-raid \\
+storage & Gère un volume distant (démarrage sur un volume Cinder). & noop, cinder \\
+\bottomrule
+\end{tabular}
+\caption{Interfaces matérielles d'un nœud (il en existe aussi pour le BIOS et la console) \parencite{ironic-drivers}.}
+\label{tab:ir-interfaces}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{États d'un nœud}\label{sec:ir-etats}
+% ---------------------------------------------------------------------
+
+Un nœud suit une machine à états (figure~\ref{fig:ir-etats}). Ses états \emph{stables} (\texttt{enroll}, \texttt{manageable},
+\texttt{available}, \texttt{active}) ne changent que sur requête de l'API ; les états \emph{transitoires}
+(\texttt{verifying}, \texttt{cleaning}, \texttt{deploying}\dots) sont pilotés par le conductor \parencite{ironic-states}.
+Le tableau~\ref{tab:ir-etats} précise leur rôle.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=2.4cm, font=\scriptsize\bfseries] (en) at (1.3,5.2) {enroll};
+  \node[psvc, minimum width=2.4cm, font=\scriptsize\bfseries] (ve) at (5.1,5.2) {verifying};
+  \node[pfoc, minimum width=2.4cm, font=\scriptsize\bfseries] (ma) at (8.9,5.2) {manageable};
+  \node[psvc, minimum width=2.4cm, font=\scriptsize\bfseries] (cl) at (12.7,5.2) {cleaning\\ {\mdseries et clean wait}};
+  \node[pfoc, minimum width=2.4cm, font=\scriptsize\bfseries] (av) at (16.5,5.2) {available};
+  \node[psvc, minimum width=2.4cm, font=\scriptsize\bfseries] (dp) at (16.5,3.2) {deploying\\ {\mdseries et wait call-back}};
+  \node[pfoc, minimum width=2.4cm, font=\scriptsize\bfseries] (ac) at (16.5,1.2) {active};
+  \node[psvc, minimum width=2.4cm, font=\scriptsize\bfseries] (de) at (12.7,1.2) {deleting};
+  \node[pdat, minimum width=2.4cm, font=\scriptsize\bfseries] (cf) at (8.9,3.2) {clean failed};
+  \draw[fluxr] (en) -- (ve) node[etiqf, midway, above=2pt] {manage};
+  \draw[fluxo] (ve) -- (ma);
+  \draw[fluxr] (ma) -- (cl) node[etiqf, midway, above=2pt] {provide};
+  \draw[fluxo] (cl) -- (av);
+  \draw[fluxr] (av) -- (dp) node[etiqf, midway, left=3pt] {deploy};
+  \draw[fluxo] (dp) -- (ac);
+  \draw[fluxr] (ac) -- (de) node[etiqf, midway, above=2pt] {undeploy};
+  \draw[fluxo] (de) -- (cl);
+  \draw[fluxd] (cl.south west) -- (cf.north east) node[etiqf, pos=0.5, right=3pt] {échec};
+  \draw[fluxr] (cf) -- (ma) node[etiqf, midway, right=3pt] {manage};
+  \node[pfoc, minimum width=2.4cm, font=\scriptsize\bfseries] at (1.3,2.2) {stable};
+  \node[psvc, minimum width=2.4cm, font=\scriptsize\bfseries] at (1.3,1.3) {transitoire};
+  \node[pdat, minimum width=2.4cm, font=\scriptsize\bfseries] at (1.3,0.4) {échec};
+  \node[anchor=west, font=\scriptsize] at (2.9,2.2) {on n'en sort que par une requête de l'API};
+  \node[anchor=west, font=\scriptsize] at (2.9,1.3) {piloté par le conductor};
+  \node[anchor=west, font=\scriptsize] at (2.9,0.4) {le nœud attend une correction};
+  \node[callout, minimum width=15.6cm] at (9.0,-0.9)
+    {Entre deux locataires, le nœud repasse toujours par cleaning : les disques sont effacés avant un nouveau déploiement.};
+\end{tikzpicture}}
+\caption{États principaux d'un nœud. Les flèches rouges sont des requêtes de l'API (le verbe est en étiquette), les flèches
+orange des transitions du conductor ; \texttt{deploy} et \texttt{undeploy} sont des alias de \texttt{active} et
+\texttt{deleted}.}
+\label{fig:ir-etats}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.6cm}>{\raggedright\arraybackslash}p{8.6cm}>{\raggedright\arraybackslash\ttfamily\small}p{3.3cm}@{}}
+\toprule
+\textrm{\textbf{État}} & \textbf{Signification} & \textrm{\textbf{Sortie}} \\
+\midrule
+enroll & État initial d'un nœud créé (API 1.11 ou plus récente) : Ironic sait seulement qu'il existe. & manage \\
+verifying, manageable & Ironic vérifie qu'il sait gérer le nœud (identifiants du BMC). En \texttt{manageable}, on peut modifier le nœud. & provide, inspect \\
+cleaning, clean wait & Nettoyage : le conductor exécute les étapes, ou attend le ramdisk ou la fin d'une étape en bande. & automatique \\
+available & Nœud prêt : Nova peut le choisir. & deploy \\
+deploying, wait call-back & Préparation (BIOS, partitions, \emph{config drive}), puis attente de l'agent qui écrit l'image. & automatique \\
+active & Une charge de travail tourne sur le nœud. & undeploy, rebuild, rescue \\
+deleting & Défait la configuration ajoutée au déploiement. & cleaning \\
+clean failed, deploy failed & Échec : le nœud attend une correction. & manage ; deploy, undeploy \\
+\bottomrule
+\end{tabular}
+\caption{Les états d'un nœud \parencite{ironic-states}. Il existe aussi des états pour l'inspection, le secours (\texttt{rescue}),
+l'adoption d'un serveur déjà en service et la maintenance d'un nœud actif (\texttt{servicing}).}
+\label{tab:ir-etats}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Enrôler un nœud et l'offrir à Nova}\label{sec:ir-enrol}
+% ---------------------------------------------------------------------
+
+Enrôler un nœud, c'est le déclarer à Ironic, puis le faire passer de \texttt{enroll} à \texttt{available}
+\parencite{ironic-enrollment,osc-baremetal}. On crée le nœud avec son type de matériel et les informations de gestion : adresse et
+identifiants du BMC, noyau et ramdisk de déploiement (ils peuvent aussi être fixés pour tous les nœuds dans la
+configuration du conductor \parencite{ironic-glance-images}). On déclare chaque carte réseau par un port et l'on attribue au
+nœud une classe de ressources.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ NODE=$(openstack baremetal node create --driver ipmi \
+    --name gpu-node-01 --resource-class baremetal-gpu \
+    --driver-info ipmi_address=10.0.0.21 \
+    --driver-info ipmi_username=admin --driver-info ipmi_password=SECRET \
+    --driver-info deploy_kernel=$KERNEL_UUID \
+    --driver-info deploy_ramdisk=$RAMDISK_UUID \
+    -f value -c uuid)
+$ openstack baremetal port create AA:BB:CC:DD:EE:01 --node $NODE
+$ openstack baremetal node validate $NODE
+$ openstack baremetal node manage $NODE
+$ openstack baremetal node provide $NODE
+$ openstack baremetal node show $NODE -c provision_state -c last_error
+\end{lstlisting}
+\end{minipage}\par
+
+\texttt{manage} et \texttt{provide} sont asynchrones : on suit leur résultat avec \texttt{node show}, dont le champ
+\texttt{last\_\allowbreak error} explique un échec. \texttt{validate} contrôle chaque interface ; une erreur sur l'interface de
+déploiement faute d'informations d'image est normale quand Nova les fournit au moment du déploiement
+\parencite{ironic-enrollment}. \texttt{provide} lance le nettoyage automatique (section~\ref{sec:ir-nettoyage}).
+
+Du côté de Nova, chaque nœud \texttt{available} apparaît comme un hôte distinct (hyperviseur de type \texttt{ironic}) et, pour
+Placement, comme un fournisseur de ressources dont l'identifiant est celui du nœud \parencite{ironic-troubleshooting}. Le
+flavor demande exactement une unité de la classe de ressources du nœud \parencite{ironic-nova-flavors}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack flavor create --ram 262144 --vcpus 32 --disk 960 \
+    baremetal-gpu
+$ openstack flavor set baremetal-gpu \
+    --property resources:CUSTOM_BAREMETAL_GPU=1 \
+    --property resources:VCPU=0 \
+    --property resources:MEMORY_MB=0 \
+    --property resources:DISK_GB=0
+\end{lstlisting}
+\end{minipage}\par
+
+Le nom de la classe est celui du nœud, en majuscules, préfixé par \texttt{CUSTOM\_} et avec la ponctuation remplacée par des
+soulignés : \texttt{baremetal-gpu} devient \texttt{CUSTOM\_\allowbreak BAREMETAL\_\allowbreak GPU}. Les trois propriétés à zéro
+désactivent l'ordonnancement sur les ressources standard ; la mémoire et le nombre de processeurs du flavor ne servent qu'à
+informer l'utilisateur, et le disque à dimensionner la partition racine. On peut aussi exiger des traits
+(\texttt{trait:HW\_CPU\_X86\_VMX=required}) \parencite{ironic-nova-flavors}.
+
+% ---------------------------------------------------------------------
+\subsection{Déploiement et nettoyage}\label{sec:ir-nettoyage}
+% ---------------------------------------------------------------------
+
+La figure~\ref{fig:ir-seq} montre un déploiement par démarrage réseau. Il comporte deux cycles d'alimentation : le premier
+démarre le ramdisk de déploiement (\gls{pxe} : DHCP, puis TFTP ou HTTP), le second le système installé
+\parencite{ironic-overview}. Le ramdisk exécute l'agent \gls{ipa}, qui appelle l'API d'Ironic pour recevoir ses ordres ;
+avec l'interface de déploiement \texttt{direct}, il télécharge lui-même l'image depuis une URL HTTP, par exemple une URL
+temporaire de Swift \parencite{ironic-deploy-interfaces}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.4cm, fill=insarouge!8, draw=insarouge] (n) at (0.8,0) {Nova};
+  \node[acteur, minimum width=2.4cm, fill=insarouge, text=white, draw=black] (i) at (4.5,0) {Ironic};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (s) at (8.2,0) {Serveur\\ (BMC, agent)};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (g) at (11.9,0) {Glance,\\ Swift};
+  \node[acteur, minimum width=2.4cm, fill=insagris!12, draw=insagris] (x) at (15.6,0) {Neutron};
+  \foreach \a in {n,i,s,g,x} \draw[vie] (\a.south) -- ++(0,-10.0);
+  \seqmsg{0.8}{4.5}{-1.2}{1}{deploy\\ (image, VIF)}
+  \seqmsg{4.5}{15.6}{-2.3}{2}{provisionnement\\ (DHCP, PXE)}
+  \seqmsg{4.5}{8.2}{-3.4}{3}{alimentation, démarrage\\ réseau (BMC)}
+  \seqrep{8.2}{4.5}{-4.5}{4}{rappel de l'agent\\ (\texttt{wait call-back})}
+  \seqmsg{8.2}{11.9}{-5.6}{5}{télécharge\\ l'image (HTTP)}
+  \node[callout, font=\scriptsize, text width=2.6cm] at (8.2,-6.45) {écrit l'image sur le disque};
+  \seqmsg{4.5}{8.2}{-7.5}{6}{arrêt, puis démarrage\\ sur le disque}
+  \seqmsg{4.5}{15.6}{-8.6}{7}{réseau du\\ locataire}
+  \seqrep{4.5}{0.8}{-9.7}{8}{état \texttt{active}}
+\end{tikzpicture}}
+\caption{Déploiement d'une instance bare metal. Nova demande le déploiement (1) ; Ironic prépare le réseau de provisionnement
+(2) et démarre le serveur par le réseau (3). L'agent rappelle Ironic (4) et télécharge l'image (5) ; Ironic redémarre le
+serveur sur son disque (6), raccorde le réseau du locataire (7) et passe le nœud à \texttt{active} (8).}
+\label{fig:ir-seq}
+\end{figure}
+
+Quand l'instance est supprimée, le nœud passe par \texttt{deleting} puis par le \gls{nettoyage} avant de redevenir
+\texttt{available}. Le nettoyage automatique s'exécute aussi la première fois qu'un nœud passe de \texttt{manageable} à
+\texttt{available} \parencite{ironic-cleaning}. Il est activé par défaut (\texttt{[conductor] automated\_\allowbreak clean = true})
+et demande un réseau de nettoyage (\texttt{[neutron] cleaning\_\allowbreak network}) \parencite{ironic-configure-cleaning}. Ses
+étapes viennent des interfaces matérielles, classées par priorité ; donner la priorité zéro à une étape la désactive
+(tableau~\ref{tab:ir-nettoyage}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{4.4cm}>{\raggedright\arraybackslash}p{6.4cm}>{\raggedright\arraybackslash}p{4.7cm}@{}}
+\toprule
+\textrm{\textbf{Étape}} & \textbf{Effet} & \textbf{Durée et garantie} \\
+\midrule
+erase\_devices\_metadata & Détruit les métadonnées du disque, sans effacer toutes les données. & Secondes à minutes ; une restauration reste possible avec de l'expertise. \\
+erase\_devices & Effacement sécurisé matériel quand le disque le permet (NVMe, certains disques ATA) ; sinon, selon la configuration, écrasement (\texttt{shred}) ou échec. & Des heures, voire des jours, sans effacement matériel. \\
+erase\_devices\_express & Effacement matériel si possible (NVMe), sinon métadonnées. & Court ; désactivé par défaut. \\
+\bottomrule
+\end{tabular}
+\caption{Étapes de nettoyage du stockage \parencite{ironic-cleaning}.}
+\label{tab:ir-nettoyage}
+\end{table}
+
+Par défaut, Ironic exécute \texttt{erase\_\allowbreak devices\_\allowbreak metadata} tôt, pour qu'un nœud ne puisse pas redémarrer
+sur son ancienne charge, puis \texttt{erase\_\allowbreak devices} \parencite{ironic-cleaning}. Si le nettoyage échoue, le nœud passe en
+\texttt{clean failed} ; si l'échec survient pendant une étape, il est aussi mis en maintenance, et il n'est pas éteint. On n'en
+sort que par \texttt{manage} (état \texttt{manageable}) : on y répare le nœud, puis on le rend avec \texttt{maintenance unset}
+et \texttt{provide} (exercice~\ref{ex:ir-clean}). Le nettoyage manuel, lui, est lancé par l'opérateur.
+
+% ---------------------------------------------------------------------
+\subsection{Réseau et inspection}\label{sec:ir-reseau}
+% ---------------------------------------------------------------------
+
+L'interface réseau du nœud décide de son raccordement \parencite{ironic-networking} :
+
+\begin{itemize}
+  \item \texttt{noop} : aucune commutation ; pour les déploiements sans Neutron ;
+  \item \texttt{flat} : tous les nœuds restent branchés sur un même réseau fournisseur, préconfiguré ;
+  \item \texttt{neutron} : réseaux de locataires isolés. Le nœud passe du réseau de nettoyage au réseau de provisionnement,
+        puis au réseau du locataire, et les commutateurs sont reprogrammés par un plugin ML2.
+\end{itemize}
+
+Avec \texttt{neutron}, le port d'Ironic porte les informations de liaison (\texttt{local\_\allowbreak link\_\allowbreak connection}) qui
+indiquent à Neutron à quel port de commutateur le serveur est branché. Les réseaux de provisionnement et de nettoyage doivent
+être réservés à Ironic (non partagés, projet \texttt{admin}) et laisser passer DHCP, TFTP, l'accès à l'API (port 6385) et
+l'accès à l'agent (port 9999) \parencite{ironic-networking,ironic-tenant-networks}.
+
+L'\emph{inspection} relève les propriétés matérielles d'un nœud (mémoire, disque, architecture\dots) et crée ses ports. Elle
+part de l'état \texttt{manageable} (\texttt{openstack baremetal node inspect}). Elle se fait hors bande, par le BMC (types
+\texttt{redfish}, \texttt{idrac}), ou en bande, par l'agent dans un ramdisk : plus longue et plus fragile, mais indépendante du constructeur
+\parencite{ironic-inspection}.
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre et dépannage}\label{sec:ir-deploiement}
+% ---------------------------------------------------------------------
+
+L'installation suppose Keystone, Glance, Nova et Neutron en place. On crée la base \texttt{ironic} (en \texttt{utf8mb4}),
+l'utilisateur \texttt{ironic} (rôle \texttt{admin} du projet \texttt{service}), le service \texttt{baremetal} et ses trois
+endpoints (port 6385) et, pour déléguer des droits limités, les rôles \texttt{baremetal\_\allowbreak admin} et
+\texttt{baremetal\_\allowbreak observer} \parencite{ironic-identity,ironic-install}. On installe \texttt{ironic-api},
+\texttt{ironic-conductor}, \texttt{ironic-novncproxy} et \texttt{python3-ironicclient}, puis on configure le service. Le
+serveur du conductor fournit aussi TFTP ou HTTP, et \texttt{ipmitool} pour les nœuds IPMI \parencite{ironic-pxe,ironic-ipmi}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/ironic/ironic.conf (extrait)
+[DEFAULT]
+my_ip = 10.0.0.11
+transport_url = rabbit://openstack:RABBIT_PASS@controller
+enabled_hardware_types = ipmi,redfish
+enabled_network_interfaces = flat,neutron
+default_network_interface = neutron
+[database]
+connection = mysql+pymysql://ironic:IRONIC_DBPASS@controller/ironic
+[conductor]
+automated_clean = true
+[neutron]
+provisioning_network = provisioning
+cleaning_network = cleaning
+\end{lstlisting}
+\end{minipage}\par
+
+On crée le schéma de la base avec \texttt{ironic-dbsync --config-file /etc/ironic/ironic.conf create\_\allowbreak schema}, puis on
+redémarre \texttt{ironic-api} et \texttt{ironic-conductor} \parencite{ironic-install}. Nova doit utiliser le pilote Ironic, sur
+le contrôleur et sur le nœud de calcul qui représente les serveurs physiques \parencite{ironic-nova-compute} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/nova/nova.conf (extrait)
+[DEFAULT]
+compute_driver = ironic.IronicDriver
+reserved_host_memory_mb = 0
+[filter_scheduler]
+track_instance_changes = False
+[scheduler]
+discover_hosts_in_cells_interval = 120
+[ironic]
+auth_type = password
+auth_url = http://controller:5000/v3
+project_name = service
+username = ironic
+password = IRONIC_PASS
+\end{lstlisting}
+\end{minipage}\par
+
+Le tableau~\ref{tab:ir-pannes} résume les pannes courantes \parencite{ironic-troubleshooting,ironic-troubleshooting-install}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{6.6cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Nova : « No valid host was found » & Aucun nœud \texttt{available}, hors maintenance et libre ; classe de ressources absente du nœud ou du flavor ; Placement sans candidat. & \texttt{openstack baremetal node list --provision-state available --no-maintenance --unassociated} \\
+Nœud bloqué en \texttt{wait call-back} ou \texttt{clean wait} & Le serveur ne démarre pas le ramdisk (DHCP, TFTP, ordre de démarrage) ou l'agent ne joint pas l'API (ports 6385, 9999). & Console du nœud ; journal du conductor ; \texttt{ipmitool \dots{} chassis power status} \\
+\texttt{clean failed} & Une étape de nettoyage a échoué (disque, BMC) ; le nœud est en maintenance. & \texttt{node show} (\texttt{last\_\allowbreak error}) ; journaux de l'agent \\
+Nœud en maintenance, \texttt{power failure} & Ironic ne joint plus le BMC : identifiants changés, réseau coupé. & Champ \texttt{maintenance\_\allowbreak reason} ; commande \texttt{ipmitool} \\
+Nœud \texttt{available} absent de Nova & Nova synchronise ses ressources périodiquement ; les nouveaux hôtes doivent être découverts dans les cellules. & \texttt{openstack hypervisor list} ; \texttt{nova-manage cell\_\allowbreak v2 discover\_\allowbreak hosts} \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Ironic.}
+\label{tab:ir-pannes}
+\end{table}
+
+\clearpage
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:ir-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Enrôler un serveur}\label{ex:ir-enrol}
+Un serveur physique \texttt{srv-db-01} (BMC IPMI à l'adresse \texttt{10.0.0.31}, identifiants \texttt{admin} et \texttt{SECRET},
+deux cartes réseau d'adresses MAC \texttt{52:54:00:00:00:01} et \texttt{52:54:00:00:00:02}) doit être proposé aux utilisateurs
+avec la classe \texttt{baremetal-db}. Le noyau et le ramdisk de déploiement sont déjà fixés dans la configuration du
+conductor. Écrire les commandes qui l'amènent à l'état \texttt{available}, puis celles qui créent le flavor \texttt{bm.db}
+associé.
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}
+$ NODE=$(openstack baremetal node create --driver ipmi \
+    --name srv-db-01 --resource-class baremetal-db \
+    --driver-info ipmi_address=10.0.0.31 \
+    --driver-info ipmi_username=admin \
+    --driver-info ipmi_password=SECRET -f value -c uuid)
+$ openstack baremetal port create 52:54:00:00:00:01 --node $NODE
+$ openstack baremetal port create 52:54:00:00:00:02 --node $NODE
+$ openstack baremetal node manage $NODE
+$ openstack baremetal node provide $NODE
+$ openstack flavor create --ram 131072 --vcpus 16 --disk 480 bm.db
+$ openstack flavor set bm.db \
+    --property resources:CUSTOM_BAREMETAL_DB=1 \
+    --property resources:VCPU=0 --property resources:MEMORY_MB=0 \
+    --property resources:DISK_GB=0
+\end{lstlisting}
+Chaque carte réseau a son port. Le nœud passe par \texttt{verifying} (\texttt{manage}) puis par \texttt{cleaning}
+(\texttt{provide}) avant \texttt{available}. La classe \texttt{baremetal-db} devient \texttt{CUSTOM\_\allowbreak BAREMETAL\_\allowbreak DB}.
+\end{correction}
+
+\begin{exercice}{Libérer un serveur}\label{ex:ir-liberer}
+Un utilisateur supprime son instance bare metal. Quels états le nœud traverse-t-il avant d'être proposé de nouveau, et
+pourquoi ne l'est-il pas immédiatement ?
+\end{exercice}
+\begin{correction}
+\texttt{active}, puis \texttt{deleting} (Ironic défait la configuration ajoutée au déploiement), puis \texttt{cleaning} et
+\texttt{clean wait} (l'agent efface les disques), enfin \texttt{available}. Le nœud n'est pas rendu aussitôt car le locataire
+suivant recevra le même disque : sans nettoyage, il pourrait lire les données du précédent. L'effacement peut durer des
+heures.
+\end{correction}
+
+\begin{exercice}{Un serveur introuvable}\label{ex:ir-clean}
+Un utilisateur obtient « No valid host was found » pour le flavor \texttt{bm.db}, alors qu'un serveur de classe
+\texttt{baremetal-db} existe. \texttt{node list} le montre en \texttt{clean failed}, avec \texttt{maintenance} à \texttt{True}.
+Pourquoi Nova ne le propose-t-il pas ? Comment le remettre en service ?
+\end{exercice}
+\begin{correction}
+Seuls les nœuds \texttt{available}, hors maintenance et sans instance sont candidats ; un nœud en \texttt{clean failed} n'est
+ni l'un ni l'autre. On lit \texttt{last\_error}, on corrige la cause (disque défectueux, BMC), puis :
+\begin{lstlisting}
+$ openstack baremetal node manage $NODE
+$ openstack baremetal node maintenance unset $NODE
+$ openstack baremetal node provide $NODE
+\end{lstlisting}
+Le nettoyage repart du début ; une fois le nœud \texttt{available}, Nova le voit à sa prochaine synchronisation.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:ir-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Ironic provisionne des serveurs \gls{baremetal} ; avec Nova, un serveur physique se commande comme une machine virtuelle.
+  \item Un nœud a un type de matériel (\texttt{ipmi}, \texttt{redfish}), des ports (cartes réseau) et une classe de ressources
+        que le flavor réclame (\texttt{resources:CUSTOM\_\dots=1}).
+  \item L'API (6385) transmet au conductor par RPC ; le conductor pilote le BMC et le démarrage réseau ; l'agent IPA, dans un
+        ramdisk, écrit l'image.
+  \item Un nœud passe par \texttt{enroll}, \texttt{manageable}, \texttt{available}, \texttt{active} ; seules les requêtes de
+        l'API font quitter un état stable.
+  \item Le nettoyage efface les disques entre deux locataires ; un échec laisse le nœud en \texttt{clean failed} et en
+        maintenance, d'où l'on sort par \texttt{manage}.
+  \item Les réseaux de provisionnement et de nettoyage sont réservés à Ironic ; l'interface \texttt{neutron} isole les
+        locataires en reprogrammant les commutateurs.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.0cm}>{\raggedright\arraybackslash}p{10.1cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Enrôler un nœud & \texttt{openstack baremetal node create --driver D --driver-info k=v} & \ref{sec:ir-enrol} \\
+Déclarer une carte réseau & \texttt{openstack baremetal port create MAC --node N} & \ref{sec:ir-enrol} \\
+Contrôler un nœud & \texttt{node validate N}, \texttt{node show N} & \ref{sec:ir-enrol} \\
+Changer d'état & \texttt{node manage}, \texttt{provide}, \texttt{inspect}, \texttt{undeploy} & \ref{sec:ir-etats} \\
+Mettre en maintenance & \texttt{node maintenance set N}, \texttt{node maintenance unset N} & \ref{sec:ir-nettoyage} \\
+Offrir à Nova & \texttt{openstack flavor set F --property resources:CUSTOM\_C=1} & \ref{sec:ir-enrol} \\
+Appliquer le schéma de base & \texttt{ironic-dbsync create\_schema} & \ref{sec:ir-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Enrôler un serveur et le faire passer à \texttt{available}, puis écrire le flavor qui le réclame (exercice~\ref{ex:ir-enrol}).
+  \item Décrire les états traversés à la libération d'un serveur et justifier le nettoyage (exercice~\ref{ex:ir-liberer}).
+  \item Diagnostiquer un « No valid host » et remettre en service un nœud en \texttt{clean failed} (exercice~\ref{ex:ir-clean}).
+\end{itemize}
+\end{savoirfaire}

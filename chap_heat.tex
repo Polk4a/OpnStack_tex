@@ -2,10 +2,563 @@
 %  Chapitre « Heat : l'orchestration »
 %  Fichier importé par main.tex avec \include{chap_heat}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Stockage et orchestration » (chapitre 3, partie 3) et
+%  documentation officielle de Heat (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Heat : l'orchestration}\label{chap:heat}
+% =====================================================================
+
+Heat décrit une infrastructure complète dans un fichier texte, puis la crée, la modifie et la détruit en appelant les API des
+autres services. Ce chapitre présente son rôle, ses concepts (modèle, stack, ressource), son architecture, le format des
+modèles, le cycle de vie d'une stack, les fonctions avancées (groupes, mise à l'échelle, composition) et la mise en œuvre.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Heat}\label{sec:he-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Heat}
+Heat est le service d'orchestration d'OpenStack. Il lit un \gls{modeleheat} qui décrit des ressources et leurs liens, puis crée
+une \gls{stack} qui les matérialise en appelant les API des autres services ; il offre pour cela une API REST native d'OpenStack
+\parencite{heat-index}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Créer, reproduire et faire évoluer de façon fiable une infrastructure de dizaines de ressources
+        liées (réseaux, serveurs, volumes) sans tout exécuter à la main (support de cours, chapitre 3, partie 3).
+  \item \textbf{Communique avec.} Keystone (authentification et délégation de droits), puis les API de Nova (serveurs),
+        Neutron (réseaux), Cinder (volumes) et des autres services dont les ressources figurent dans le modèle
+        \parencite{heat-resource-types}. Heat orchestre les autres services ; il n'en remplace aucun.
+  \item \textbf{Exemple.} créer une stack à partir d'un fichier :
+\begin{lstlisting}[style=terminal]
+$ openstack stack create -t mystack.yaml mystack
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,6.8) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (he) at (6.4,3.9)
+    {Heat\\ {\scriptsize\mdseries orchestration}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,3.9) {Keystone};
+  \node[psvc, minimum width=2.6cm] (no) at (11.9,5.7) {Nova};
+  \node[psvc, minimum width=2.6cm] (ne) at (11.9,3.9) {Neutron};
+  \node[psvc, minimum width=2.6cm] (ci) at (11.9,2.1) {Cinder};
+  \node[pdat, minimum width=11.4cm] (st) at (6.4,0.3) {Stack : réseau $+$ sous-réseau $+$ serveur $+$ volume};
+  \draw[fluxr] (cli) -- (he)
+    node[num, pos=0.3] {1} node[etiqf, midway, left=4mm] {modèle et paramètres};
+  \draw[fluxo] (he.west) -- (ks.east)
+    node[num, pos=0.2, above=3pt] {2} node[etiqf, pos=0.62, above=2pt] {token, trust};
+  \draw[fluxo] (he.east) -- (no.west)
+    node[num, pos=0.2, above=3pt] {3} node[etiqf, pos=0.62, above=2pt] {serveurs};
+  \draw[fluxo] (he.east) -- (ne.west)
+    node[etiqf, pos=0.62, above=2pt] {réseaux};
+  \draw[fluxo] (he.east) -- (ci.west)
+    node[etiqf, pos=0.62, below=2pt] {volumes};
+  \draw[fluxr] (he.south) -- (st.north)
+    node[num, pos=0.45] {4} node[etiqf, midway, right=5mm] {crée la stack};
+  \node[callout, minimum width=13.4cm] at (6.4,-0.9)
+    {Heat ne remplace aucun service : il appelle leurs API, dans l'ordre déduit du modèle.};
+\end{tikzpicture}}
+\caption{Heat et ses voisins. Le client envoie un modèle et ses paramètres (1) après validation du token et délégation de
+droits par Keystone (2). Heat appelle les API de Nova, Neutron et Cinder (3) et obtient la stack (4).}
+\label{fig:he-env}
+\end{figure}
+
+\begin{remarque}[Heat et Terraform]
+Terraform décrit aussi une infrastructure par des fichiers, pour de nombreux fournisseurs. Heat est l'outil natif d'OpenStack :
+intégré à Keystone et aux autres API, mais limité à ce périmètre (support de cours).
+\end{remarque}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : modèle, stack, ressource}\label{sec:he-concepts}
+% ---------------------------------------------------------------------
+
+Un \gls{modeleheat} est un document non procédural : il dit \emph{ce qu'on veut}, pas la suite de commandes pour l'obtenir.
+Heat sait lire des modèles au format CloudFormation (JSON) et au format \gls{hot} (YAML), qui est le format natif
+\parencite{heat-intro}. Le tableau~\ref{tab:he-objets} résume le vocabulaire \parencite{heat-glossary}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{8.4cm}>{\raggedright\arraybackslash\ttfamily\small}p{4.1cm}@{}}
+\toprule
+\textbf{Terme} & \textbf{Rôle} & \textrm{\textbf{Exemple}} \\
+\midrule
+\Gls{modeleheat} & Fichier YAML (format HOT) qui décrit l'infrastructure voulue. & mystack.yaml \\
+\Gls{ressourceheat} & Élément d'infrastructure, d'un type \texttt{OS::Service::Type}. & OS::Nova::Server \\
+\Gls{stack} & Ensemble de ressources créé à partir d'un modèle : l'unité de création, de mise à jour et de suppression. & mystack \\
+Paramètre & Valeur d'entrée qui personnalise le modèle. & flavor \\
+Sortie (\emph{output}) & Valeur calculée, renvoyée une fois la stack créée. & server\_ip \\
+\Gls{environnementheat} & Fichier de valeurs de paramètres et de remplacements de types de ressources. & env.yaml \\
+\bottomrule
+\end{tabular}
+\caption{Le vocabulaire de Heat \parencite{heat-glossary}.}
+\label{tab:he-objets}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Architecture}\label{sec:he-archi}
+% ---------------------------------------------------------------------
+
+Heat se compose de deux API et d'un moteur (tableau~\ref{tab:he-composants} et figure~\ref{fig:he-archi}). Les API ne font que
+transmettre les requêtes au moteur par RPC ; c'est le moteur qui orchestre la création des modèles et renvoie des événements
+à l'appelant \parencite{heat-architecture}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.4cm}>{\raggedright\arraybackslash}p{10.1cm}>{\raggedright\arraybackslash}p{2.0cm}@{}}
+\toprule
+\textrm{\textbf{Composant}} & \textbf{Rôle} & \textbf{Port} \\
+\midrule
+heat-api & API REST native d'OpenStack ; envoie les requêtes au moteur par RPC. & 8004 \\
+heat-api-cfn & API de type CloudFormation (\emph{Query API}), compatible avec celle d'AWS ; même rôle. & 8000 \\
+heat-engine & Orchestre la création des modèles, appelle les API des autres services, renvoie les événements. & \\
+\bottomrule
+\end{tabular}
+\caption{Les composants de Heat et les ports de l'installation \parencite{heat-architecture,heat-install}.}
+\label{tab:he-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.4cm] (cl) at (1.0,4.6) {Clients\\ {\scriptsize\mdseries CLI, Horizon}};
+  \node[pfoc, minimum width=3.6cm] (api) at (5.0,5.8) {heat-api\\ {\scriptsize\mdseries API REST, port 8004}};
+  \node[psvc, minimum width=3.6cm] (cfn) at (5.0,3.4) {heat-api-cfn\\ {\scriptsize\mdseries API CloudFormation, 8000}};
+  \node[pgris, minimum width=2.2cm, minimum height=3.4cm] (bus) at (8.9,4.6) {File de\\ messages\\ {\scriptsize\mdseries AMQP}};
+  \node[pfoc, minimum width=3.2cm] (e1) at (12.9,5.8) {heat-engine};
+  \node[psvc, minimum width=3.2cm] (e2) at (12.9,3.4) {heat-engine};
+  \node[pgris, minimum width=3.4cm] (db) at (5.0,0.6) {Base de données};
+  \node[pdat, minimum width=5.2cm] (sv) at (12.4,0.6) {API des services\\ {\scriptsize\mdseries Keystone, Nova, Neutron, Cinder\dots}};
+  \draw[fluxr] (cl.east) -- (api.west) node[num, pos=0.35, above=3pt] {1};
+  \draw[fluxr] (cl.east) -- (cfn.west);
+  \draw[fluxo] (api.east) -- (api.east -| bus.west) node[num, pos=0.5, above=3pt] {2};
+  \draw[fluxo] (cfn.east) -- (cfn.east -| bus.west);
+  \draw[fluxo] (bus.east |- e1.west) -- (e1.west);
+  \draw[fluxo] (bus.east |- e2.west) -- (e2.west);
+  \draw[fluxr] (e2.south) -- (e2.south |- sv.north) node[num, pos=0.5, left=4pt] {3};
+  \draw[fluxd] (e2.south west) -- (db.north east) node[num, pos=0.42, above right=1pt] {4};
+  \node[etiqf] at (9.6,1.55) {état des stacks};
+  \node[callout, minimum width=15.4cm] at (7.9,-0.8)
+    {On multiplie les API derrière un répartiteur HTTP et les moteurs derrière la file de messages.};
+\end{tikzpicture}}
+\caption{Architecture de Heat. Les clients appellent l'une des deux API (1), qui transmettent la requête à un moteur par la
+file de messages (2). Le moteur appelle les API des services (3) et enregistre l'état des stacks dans la base (4).}
+\label{fig:he-archi}
+\end{figure}
+
+Plusieurs API peuvent tourner derrière un répartiteur HTTP ; plusieurs moteurs se partagent les messages de la file, qui les
+distribue tour à tour \parencite{heat-scale}. Pour les opérations différées (la mise à l'échelle déclenchée plus tard, par
+exemple), le moteur doit agir au nom de l'utilisateur sans disposer de son token. Il utilise donc un \gls{trust} créé à la création de la stack :
+le propriétaire délègue au service Heat les rôles nécessaires, et le moteur obtient un token limité pour agir en son nom
+\parencite{heat-auth-model}. Les utilisateurs que les modèles créent eux-mêmes vivent dans un domaine séparé, nommé \texttt{heat},
+et ne portent que le rôle \texttt{heat\_\allowbreak stack\_\allowbreak user}, qui limite l'API accessible
+\parencite{heat-stack-domain-users}.
+
+% ---------------------------------------------------------------------
+\subsection{Écrire un modèle HOT}\label{sec:he-modele}
+% ---------------------------------------------------------------------
+
+Un modèle HOT comporte une version (\texttt{heat\_\allowbreak template\_\allowbreak version}, obligatoire), une description, des
+paramètres, des ressources (au moins une) et des sorties \parencite{heat-hello-world}. La version choisit les fonctions
+disponibles et suit les versions d'OpenStack : \texttt{2013-05-23} pour Icehouse, \texttt{2018-08-31} pour Rocky,
+\texttt{2021-04-16} pour Wallaby \parencite{heat-hot-spec}. Le modèle suivant crée un réseau, un serveur et un volume.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+heat_template_version: 2018-08-31
+parameters:
+  flavor: { type: string, default: m1.small }
+resources:
+  net: { type: OS::Neutron::Net }
+  subnet:
+    type: OS::Neutron::Subnet
+    properties: { network: { get_resource: net }, cidr: 10.20.0.0/24 }
+  server:
+    type: OS::Nova::Server
+    properties:
+      image: ubuntu
+      flavor: { get_param: flavor }
+      networks: [ { subnet: { get_resource: subnet } } ]
+  volume:
+    type: OS::Cinder::Volume
+    properties: { size: 10 }
+  attach:
+    type: OS::Cinder::VolumeAttachment
+    properties:
+      instance_uuid: { get_resource: server }
+      volume_id: { get_resource: volume }
+outputs:
+  server_ip:
+    value: { get_attr: [server, first_address] }
+\end{lstlisting}
+\end{minipage}\par
+
+Un paramètre a un type (\texttt{string}, \texttt{number}, \texttt{json}, \texttt{comma\_\allowbreak delimited\_\allowbreak list},
+\texttt{boolean}), une valeur par défaut (sans elle, l'utilisateur doit en fournir une), un attribut \texttt{hidden: true} qui
+masque sa valeur (un mot de passe) et des contraintes (\texttt{allowed\_\allowbreak values}, \texttt{length}, \texttt{range},
+\texttt{allowed\_\allowbreak pattern}) \parencite{heat-hello-world}. Les \emph{fonctions intrinsèques} du tableau~\ref{tab:he-fonctions}
+relient les éléments entre eux ; \texttt{get\_resource} et \texttt{get\_attr} créent en même temps une dépendance
+(section~\ref{sec:he-cycle}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.0cm}>{\raggedright\arraybackslash}p{7.2cm}>{\raggedright\arraybackslash\ttfamily\small}p{5.3cm}@{}}
+\toprule
+\textrm{\textbf{Fonction}} & \textbf{Rôle} & \textrm{\textbf{Exemple}} \\
+\midrule
+get\_param & Valeur d'un paramètre. & \{ get\_param: flavor \} \\
+get\_resource & Identifiant d'une autre ressource du modèle. & \{ get\_resource: net \} \\
+get\_attr & Attribut d'une ressource, connu à l'exécution. & \{ get\_attr: [server, first\_address] \} \\
+str\_replace & Remplace des chaînes dans un texte, par exemple un script de démarrage. & \{ str\_replace: \{ template: \dots, params: \dots \} \} \\
+get\_file & Contenu d'un fichier, joint à la requête. & \{ get\_file: boot.sh \} \\
+depends\_on & Dépendance explicite, sans référence (attribut d'une ressource). & depends\_on: server2 \\
+\bottomrule
+\end{tabular}
+\caption{Fonctions intrinsèques et dépendances d'un modèle HOT \parencite{heat-hot-spec}.}
+\label{tab:he-fonctions}
+\end{table}
+
+Un \gls{environnementheat}, passé avec \texttt{-e}, fournit des valeurs de paramètres (section \texttt{parameters}), des valeurs
+par défaut pour tous les modèles imbriqués (\texttt{parameter\_\allowbreak defaults}) et des remplacements de types
+(\texttt{resource\_\allowbreak registry}) ; ses valeurs l'emportent sur celles de l'opérateur du cloud \parencite{heat-environment}.
+
+% ---------------------------------------------------------------------
+\subsection{Cycle de vie d'une stack}\label{sec:he-cycle}
+% ---------------------------------------------------------------------
+
+Heat construit un \gls{graphedeps} à partir des références du modèle : une ressource qui référence une autre (ou l'un de
+ses attributs), ou qui la nomme dans \texttt{depends\_on}, n'est créée qu'après elle \parencite{heat-glossary}. Les ressources
+sans lien sont créées en parallèle \parencite{heat-environment}. La figure~\ref{fig:he-graph} montre le graphe du modèle
+précédent ; la suppression suit l'ordre inverse.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[font=\scriptsize\bfseries, text=insaorange] at (1.4,4.6) {Étape 1};
+  \node[font=\scriptsize\bfseries, text=insaorange] at (5.4,4.6) {Étape 2};
+  \node[font=\scriptsize\bfseries, text=insaorange] at (9.4,4.6) {Étape 3};
+  \node[font=\scriptsize\bfseries, text=insaorange] at (13.4,4.6) {Étape 4};
+  \node[psvc, minimum width=2.0cm] (net) at (1.4,3.5) {net};
+  \node[psvc, minimum width=2.0cm] (sub) at (5.4,3.5) {subnet};
+  \node[psvc, minimum width=2.0cm] (srv) at (9.4,3.5) {server};
+  \node[pdat, minimum width=2.4cm] (out) at (13.4,3.5) {sortie\\ {\scriptsize\mdseries server\_ip}};
+  \node[psvc, minimum width=2.0cm] (vol) at (1.4,0.9) {volume};
+  \node[psvc, minimum width=2.0cm] (att) at (13.4,0.9) {attach};
+  \draw[fluxo] (net) -- (sub) node[etiqf, midway, above=2pt] {get\_resource};
+  \draw[fluxo] (sub) -- (srv) node[etiqf, midway, above=2pt] {get\_resource};
+  \draw[fluxd] (srv) -- (out) node[etiqf, midway, above=2pt] {get\_attr};
+  \draw[fluxo] (srv.south) -- (9.4,2.4) -| (att.north);
+  \node[etiqf] at (11.4,2.4) {get\_resource};
+  \draw[fluxo] (vol) -- (att) node[etiqf, midway, above=2pt] {get\_resource};
+  \node[etiqf, anchor=north] at (7.4,0.7) {aucune dépendance : créé dès l'étape 1, en parallèle de net};
+  \node[callout, minimum width=14.4cm] at (7.4,-0.8)
+    {Une flèche va de la ressource référencée vers celle qui la référence : elle est créée la première.};
+\end{tikzpicture}}
+\caption{Graphe de dépendances du modèle de la section~\ref{sec:he-modele}. \texttt{net} et \texttt{volume}, sans dépendance,
+sont créés d'abord et en parallèle ; \texttt{attach} attend \texttt{server} et \texttt{volume}. La suppression se fait dans
+l'ordre inverse.}
+\label{fig:he-graph}
+\end{figure}
+
+La création est asynchrone (figure~\ref{fig:he-seq}) : l'API répond avec l'identifiant de la stack, qui passe de
+\texttt{CREATE\_\allowbreak IN\_\allowbreak PROGRESS} à \texttt{CREATE\_\allowbreak COMPLETE} \parencite{heat-create-stack}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.4cm, fill=insarouge!8, draw=insarouge] (c) at (0.8,0) {Client\\ (CLI)};
+  \node[acteur, minimum width=2.4cm, fill=insarouge, text=white, draw=black] (a) at (4.5,0) {heat-api};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (e) at (8.2,0) {heat-engine};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (k) at (11.9,0) {Keystone};
+  \node[acteur, minimum width=2.4cm, fill=insagris!12, draw=insagris] (s) at (15.6,0) {Nova, Neutron,\\ Cinder};
+  \foreach \x in {c,a,e,k,s} \draw[vie] (\x.south) -- ++(0,-9.4);
+  \seqmsg{0.8}{4.5}{-1.2}{1}{stack create\\ (modèle, token)}
+  \seqrep{4.5}{0.8}{-2.1}{}{identifiant,\\ \texttt{CREATE\_IN\_PROGRESS}}
+  \seqmsg{4.5}{8.2}{-3.2}{2}{RPC : créer\\ la stack}
+  \seqmsg{8.2}{11.9}{-4.3}{3}{créer un trust\\ (token du propriétaire)}
+  \seqrep{11.9}{8.2}{-5.2}{}{identifiant du trust\\ (stocké chiffré)}
+  \seqmsg{8.2}{15.6}{-6.3}{4}{créer les ressources,\\ dans l'ordre du graphe}
+  \seqrep{15.6}{8.2}{-7.2}{}{ressources créées}
+  \node[callout, font=\scriptsize, text width=3.4cm] at (8.2,-8.1) {état : \texttt{CREATE\_COMPLETE}};
+  \seqmsg{0.8}{4.5}{-9.0}{5}{stack show}
+  \seqrep{4.5}{0.8}{-9.8}{}{\texttt{CREATE\_COMPLETE}}
+\end{tikzpicture}}
+\caption{Création d'une stack. L'API accepte la demande (1) et la transmet au moteur (2) ; celui-ci crée un trust à partir du
+token du propriétaire (3) puis les ressources (4). Le client constate ensuite l'état \texttt{CREATE\_COMPLETE} (5).}
+\label{fig:he-seq}
+\end{figure}
+
+Chaque état s'écrit \emph{action}\texttt{\_}\emph{statut} (figure~\ref{fig:he-vie}). Les commandes usuelles servent à suivre
+une stack, à la mettre à jour et à la supprimer \parencite{osc-stack,heat-create-stack} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack stack create -t mystack.yaml --parameter flavor=m1.medium \
+    --wait mystack
+$ openstack stack event list mystack
+$ openstack stack resource list mystack
+$ openstack stack output show mystack server_ip
+$ openstack stack update -t mystack-v2.yaml --dry-run mystack
+$ openstack stack update -t mystack-v2.yaml --wait mystack
+$ openstack stack delete mystack
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.4cm] (c1) at (1.2,4.0) {stack create};
+  \node[pcli, minimum width=2.4cm] (c2) at (1.2,2.0) {stack update};
+  \node[pcli, minimum width=2.4cm] (c3) at (1.2,0.0) {stack delete};
+  \node[psvc, minimum width=3.6cm, font=\scriptsize\bfseries] (p1) at (5.0,4.0) {CREATE\_IN\_PROGRESS};
+  \node[psvc, minimum width=3.6cm, font=\scriptsize\bfseries] (p2) at (5.0,2.0) {UPDATE\_IN\_PROGRESS};
+  \node[psvc, minimum width=3.6cm, font=\scriptsize\bfseries] (p3) at (5.0,0.0) {DELETE\_IN\_PROGRESS};
+  \node[pfoc, minimum width=3.4cm, font=\scriptsize\bfseries] (k1) at (10.0,4.0) {CREATE\_COMPLETE};
+  \node[pfoc, minimum width=3.4cm, font=\scriptsize\bfseries] (k2) at (10.0,2.0) {UPDATE\_COMPLETE};
+  \node[pgris, minimum width=3.4cm, font=\scriptsize\bfseries] (k3) at (10.0,0.0) {DELETE\_COMPLETE};
+  \node[pdat, minimum width=3.2cm, font=\scriptsize\bfseries] (f1) at (14.0,4.0) {CREATE\_FAILED};
+  \node[pdat, minimum width=3.2cm, font=\scriptsize\bfseries] (f2) at (14.0,2.0) {UPDATE\_FAILED};
+  \node[pdat, minimum width=3.2cm, font=\scriptsize\bfseries] (f3) at (14.0,0.0) {DELETE\_FAILED};
+  \foreach \i in {1,2,3} {
+    \draw[fluxr] (c\i) -- (p\i);
+    \draw[fluxo] (p\i) -- (k\i);
+    \draw[fluxd] (p\i.north) -- ++(0,0.65) -| (f\i.north);
+  }
+  \node[etiqf] at (7.55,4.3) {succès};
+  \node[etiqf] at (9.5,4.95) {échec};
+  \node[callout, minimum width=15.4cm] at (7.6,-1.2)
+    {Chaque état s'écrit ACTION\_STATUT. Avec le retour arrière activé, un échec lance ROLLBACK\_IN\_PROGRESS,\\
+     puis ROLLBACK\_COMPLETE.};
+\end{tikzpicture}}
+\caption{États d'une stack lors de sa création, de sa mise à jour et de sa suppression. Une stack en \texttt{*\_COMPLETE} est
+stable ; en \texttt{*\_FAILED}, elle attend une correction.}
+\label{fig:he-vie}
+\end{figure}
+
+Une mise à jour recalcule le graphe et ne touche que les ressources concernées. Pour chaque propriété modifiée, Heat met la
+ressource à jour en place ou la remplace (il en crée une nouvelle, puis supprime l'ancienne). Pour un serveur Nova, par défaut,
+changer le \texttt{flavor} le redimensionne, changer l'\texttt{image} le reconstruit, et changer le contenu de \texttt{user\_data}
+le remplace \parencite{heat-resource-types,heat-software-deployment}. L'option \texttt{--dry-run} montre ces changements sans
+les appliquer ; \texttt{--enable-rollback} (création) ou \texttt{--rollback} (mise à jour) demande un retour arrière en cas
+d'échec \parencite{osc-stack}.
+
+% ---------------------------------------------------------------------
+\subsection{Fonctions avancées}\label{sec:he-avance}
+% ---------------------------------------------------------------------
+
+Le tableau~\ref{tab:he-avance} relie quelques besoins courants au mécanisme de Heat qui y répond.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{6.0cm}>{\raggedright\arraybackslash\ttfamily\small}p{5.1cm}@{}}
+\toprule
+\textbf{Besoin} & \textbf{Mécanisme} & \textrm{\textbf{Ressource ou option}} \\
+\midrule
+Créer plusieurs ressources identiques & Groupe de ressources & OS::Heat::ResourceGroup \\
+Adapter le nombre de serveurs & Groupe de mise à l'échelle et politique, déclenchée par un appel à une URL & OS::Heat::AutoScalingGroup, OS::Heat::ScalingPolicy \\
+Découper un grand modèle & Modèle imbriqué : un fichier sert de type de ressource & type: my\_nova.yaml \\
+Configurer un serveur au démarrage & \texttt{user\_data} (cloud-init) ou ressource de configuration logicielle & OS::Heat::SoftwareConfig \\
+Attendre la fin d'une configuration & Condition d'attente, signalée par le serveur & OS::Heat::WaitCondition \\
+Garder une ressource à la suppression & Politique de suppression & deletion\_policy: Retain \\
+\bottomrule
+\end{tabular}
+\caption{Fonctions avancées de Heat \parencite{heat-composition,heat-software-deployment,heat-hot-spec}.}
+\label{tab:he-avance}
+\end{table}
+
+La mise à l'échelle combine un groupe, qui porte des bornes, et une politique. La politique expose une URL de signal : un appel
+sur cette URL, par une alarme ou à la main (\texttt{openstack stack resource signal}), ajoute ou retire des serveurs. C'est une
+opération différée, qui passe par le trust de la stack \parencite{heat-resource-types,heat-auth-model}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+resources:
+  group:
+    type: OS::Heat::AutoScalingGroup
+    properties:
+      min_size: 1
+      max_size: 3
+      resource:
+        type: server.yaml
+  scale_up:
+    type: OS::Heat::ScalingPolicy
+    properties:
+      adjustment_type: change_in_capacity
+      auto_scaling_group_id: { get_resource: group }
+      scaling_adjustment: 1
+      cooldown: 60
+outputs:
+  scale_up_url:
+    value: { get_attr: [scale_up, signal_url] }
+\end{lstlisting}
+\end{minipage}\par
+
+D'autres services s'appuient sur Heat : Magnum génère une stack pour chaque cluster Kubernetes (chapitre~\ref{chap:magnum}).
+Heat dispose aussi de types de ressources pour les répartiteurs Octavia (chapitre~\ref{chap:octavia}) et les conteneurs Swift
+(chapitre~\ref{chap:swift}) \parencite{heat-resource-types}.
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre et dépannage}\label{sec:he-deploiement}
+% ---------------------------------------------------------------------
+
+L'installation suppose Keystone déjà en place. Sur le contrôleur, on crée la base \texttt{heat}, l'utilisateur \texttt{heat}, le
+service \texttt{orchestration} (port 8004) et le service \texttt{cloudformation} (port 8000) avec leurs endpoints, puis le
+domaine \gls{domaine} \texttt{heat} avec son administrateur \texttt{heat\_\allowbreak domain\_\allowbreak admin} et les rôles
+\texttt{heat\_\allowbreak stack\_\allowbreak owner} et \texttt{heat\_\allowbreak stack\_\allowbreak user}. On installe ensuite
+\texttt{heat-api}, \texttt{heat-api-cfn} et \texttt{heat-engine} \parencite{heat-install}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/heat/heat.conf (extrait)
+[database]
+connection = mysql+pymysql://heat:HEAT_DBPASS@controller/heat
+[DEFAULT]
+transport_url = rabbit://openstack:RABBIT_PASS@controller
+heat_metadata_server_url = http://controller:8000
+heat_waitcondition_server_url = http://controller:8000/v1/waitcondition
+stack_domain_admin = heat_domain_admin
+stack_domain_admin_password = HEAT_DOMAIN_PASS
+stack_user_domain_name = heat
+\end{lstlisting}
+\end{minipage}\par
+
+On applique ensuite le schéma de la base avec \texttt{heat-manage db\_sync}, puis on redémarre les trois services
+\parencite{heat-install}. Le tableau~\ref{tab:he-pannes} résume les pannes courantes.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.0cm}>{\raggedright\arraybackslash}p{6.6cm}>{\raggedright\arraybackslash}p{4.9cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Stack en \texttt{CREATE\_\allowbreak FAILED} & Une ressource a échoué : quota, image ou flavor inexistant\dots{} L'erreur vient du service concerné. & \texttt{openstack stack failures list mystack} ; \texttt{stack event list} \\
+Stack longtemps en \texttt{CREATE\_\allowbreak IN\_\allowbreak PROGRESS} & Le modèle attend un signal (condition d'attente) qui n'arrive pas : URL de signal injoignable depuis le serveur. & \texttt{heat\_\allowbreak waitcondition\_\allowbreak server\_\allowbreak url} ; journaux du serveur \\
+Modèle refusé & Fonction ou clé absente de la version choisie, YAML mal indenté. & \texttt{openstack orchestration template validate -t mystack.yaml} \\
+Serveur remplacé après une mise à jour & Propriété dont le changement impose un remplacement, par exemple \texttt{user\_data}. & \texttt{openstack stack update --dry-run} \\
+Mise à l'échelle sans effet & Le trust ne délègue pas les rôles nécessaires. & Rôles délégués (\texttt{trusts\_\allowbreak delegated\_\allowbreak roles}) \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Heat.}
+\label{tab:he-pannes}
+\end{table}
+
+\clearpage
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:he-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Écrire un modèle}\label{ex:he-modele}
+Écrire un modèle qui crée un réseau \texttt{app-net}, son sous-réseau \texttt{10.30.0.0/24} et un serveur \texttt{web}
+d'image \texttt{ubuntu}. Le gabarit est un paramètre limité à \texttt{m1.small} ou \texttt{m1.medium} (par défaut
+\texttt{m1.small}). Le modèle renvoie l'adresse du serveur. Comment créer la stack ?
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}
+heat_template_version: 2018-08-31
+parameters:
+  flavor:
+    type: string
+    default: m1.small
+    constraints: [ { allowed_values: [m1.small, m1.medium] } ]
+resources:
+  net:
+    type: OS::Neutron::Net
+    properties: { name: app-net }
+  subnet:
+    type: OS::Neutron::Subnet
+    properties: { network: { get_resource: net }, cidr: 10.30.0.0/24 }
+  web:
+    type: OS::Nova::Server
+    properties:
+      image: ubuntu
+      flavor: { get_param: flavor }
+      networks: [ { subnet: { get_resource: subnet } } ]
+outputs:
+  web_ip:
+    value: { get_attr: [web, first_address] }
+\end{lstlisting}
+Création : \texttt{openstack stack create -t web.yaml --parameter flavor=m1.medium web-stack}.
+\end{correction}
+
+\begin{exercice}{Ordre de création}\label{ex:he-ordre}
+Un modèle contient \texttt{net}, \texttt{subnet} (qui référence \texttt{net}), \texttt{server} (qui référence \texttt{subnet}),
+\texttt{volume} (sans référence) et \texttt{attach} (qui référence \texttt{server} et \texttt{volume}). Dans quel ordre Heat
+crée-t-il les ressources ? Et à la suppression ?
+\end{exercice}
+\begin{correction}
+\texttt{net} et \texttt{volume} n'ont aucune dépendance : ils sont créés en parallèle. Viennent ensuite \texttt{subnet}, puis
+\texttt{server}, enfin \texttt{attach}, qui attend \texttt{server} et \texttt{volume}. La suppression suit l'ordre inverse :
+\texttt{attach} d'abord, puis \texttt{server} et \texttt{volume} (en parallèle), puis \texttt{subnet}, puis \texttt{net}.
+\end{correction}
+
+\begin{exercice}{Mettre à jour une stack}\label{ex:he-maj}
+Un serveur défini par un modèle est déployé. On modifie dans le modèle (a)~la valeur de \texttt{flavor}, puis
+(b)~le contenu de \texttt{user\_data}. Que fait Heat par défaut dans chaque cas, et comment le vérifier avant d'agir ?
+\end{exercice}
+\begin{correction}
+(a)~Le serveur est redimensionné (\texttt{flavor\_\allowbreak update\_\allowbreak policy} vaut \texttt{RESIZE} par défaut).
+(b)~Le serveur est remplacé : supprimé et recréé, donc une nouvelle instance (\texttt{user\_\allowbreak data\_\allowbreak update\_\allowbreak policy}
+vaut \texttt{REPLACE} par défaut). Vérification : \texttt{openstack stack update --dry-run}.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:he-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Heat crée, modifie et détruit une \gls{stack} à partir d'un modèle YAML (HOT), en appelant les API des autres services.
+  \item Un modèle déclare des paramètres, des ressources (\texttt{OS::Service::Type}) et des sorties ; les fonctions
+        \texttt{get\_param}, \texttt{get\_resource} et \texttt{get\_attr} les relient.
+  \item Les références entre ressources forment un graphe de dépendances : création dans l'ordre, en parallèle quand c'est
+        possible ; suppression dans l'ordre inverse.
+  \item L'API (\texttt{heat-api}, \texttt{heat-api-cfn}) transmet au moteur (\texttt{heat-engine}) par RPC ; un trust permet
+        les opérations différées.
+  \item Une mise à jour met à jour en place ou remplace chaque ressource selon la propriété modifiée ; \texttt{--dry-run}
+        montre le résultat avant d'agir.
+  \item Groupes, mise à l'échelle, modèles imbriqués et configuration logicielle passent par des types de ressources dédiés.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{9.9cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer une stack & \texttt{openstack stack create -t T --parameter k=v S} & \ref{sec:he-cycle} \\
+Suivre et diagnostiquer & \texttt{stack show}, \texttt{event list}, \texttt{resource list}, \texttt{failures list} & \ref{sec:he-deploiement} \\
+Lire une sortie & \texttt{openstack stack output show S sortie} & \ref{sec:he-cycle} \\
+Mettre à jour & \texttt{openstack stack update -t T --dry-run S}, puis sans \texttt{--dry-run} & \ref{sec:he-cycle} \\
+Valider un modèle & \texttt{openstack orchestration template validate -t T} & \ref{sec:he-deploiement} \\
+Supprimer & \texttt{openstack stack delete S} & \ref{sec:he-cycle} \\
+Appliquer le schéma de base & \texttt{heat-manage db\_sync} & \ref{sec:he-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Écrire un modèle HOT avec paramètre, contrainte, dépendances et sortie (exercice~\ref{ex:he-modele}).
+  \item Déduire l'ordre de création et de suppression d'un graphe de ressources (exercice~\ref{ex:he-ordre}).
+  \item Prévoir l'effet d'une mise à jour et le vérifier avec \texttt{--dry-run} (exercice~\ref{ex:he-maj}).
+\end{itemize}
+\end{savoirfaire}
