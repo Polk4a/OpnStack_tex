@@ -2,10 +2,560 @@
 %  Chapitre « Cinder : le stockage bloc »
 %  Fichier importé par main.tex avec \include{chap_cinder}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Introduction à OpenStack » (partie 9) et « Chapitre 3 »
+%  (Cinder avancé), documentation officielle de Cinder (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Cinder : le stockage bloc}\label{chap:cinder}
+% =====================================================================
+
+Cinder fournit aux instances des disques qui survivent à leur suppression. Ce chapitre présente son rôle, les
+objets qu'il manipule (volumes, snapshots, sauvegardes), son architecture, les types de volume qui orientent vers un
+backend, l'attachement d'un volume à une instance, la protection des données et la mise en œuvre.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Cinder}\label{sec:ci-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Cinder}
+Cinder est le service de stockage bloc d'OpenStack (projet \emph{Block Storage}). Il crée et gère des \glspl{volume}
+persistants : des disques que l'on attache à une instance, que l'on détache, puis que l'on rattache ailleurs sans perdre
+les données \parencite{cinder-components}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Conserver des données au-delà de la vie d'une instance. Le disque éphémère d'une instance disparaît
+        avec elle ; un volume est indépendant, il survit à sa suppression et peut servir à une autre.
+  \item \textbf{Communique avec.} Keystone (authentification), Nova (qui attache le volume et peut démarrer depuis lui),
+        Glance (volume créé à partir d'une image, image créée à partir d'un volume), Swift (dépôt des sauvegardes) et les
+        systèmes de stockage qui hébergent les données.
+  \item \textbf{Exemple.} créer un volume de 10~Go puis l'attacher à l'instance \texttt{vm1} :
+\begin{lstlisting}[style=terminal]
+$ openstack volume create --size 10 data-volume
+$ openstack server add volume vm1 data-volume
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,6.6) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (ci) at (6.4,3.7)
+    {Cinder\\ {\scriptsize\mdseries volumes}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,3.7) {Keystone};
+  \node[psvc, minimum width=2.6cm] (no) at (11.9,5.4) {Nova};
+  \node[psvc, minimum width=2.6cm] (gl) at (11.9,2.0) {Glance};
+  \node[psvc, minimum width=2.6cm] (sw) at (0.9,1.3) {Swift};
+  \node[pgris, minimum width=11.4cm] (bk) at (6.4,0.3)
+    {Backends : LVM \ $\cdot$ \ Ceph (rbd) \ $\cdot$ \ NFS \ $\cdot$ \ baies SAN};
+  \draw[fluxr] (cli) -- (ci)
+    node[num, pos=0.3] {1} node[etiqf, midway, left=4mm, text width=2.8cm, align=right] {\texttt{POST /v3/volumes}};
+  \draw[fluxo] (ci.west) -- (ks.east)
+    node[num, pos=0.15, above=3pt] {2} node[etiqf, midway, below=2pt] {valide le token};
+  \draw[fluxo] (no.west) -- (ci.north east)
+    node[num, pos=0.15, above=3pt] {3} node[etiqf, pos=0.62, above=2pt, align=center] {attache le\\ volume};
+  \draw[<->, thick, insaorange] (gl.west) -- (ci.south east)
+    node[etiqf, pos=0.5, below=2pt, text width=2.3cm] {image $\leftrightarrow$ volume};
+  \draw[fluxo] (ci.south west) -- (sw.north east) node[etiqf, midway, below=2pt, text width=1.9cm] {sauvegardes};
+  \draw[fluxr] (ci.south) -- (bk.north)
+    node[num, pos=0.45] {4} node[etiqf, midway, right=5mm] {pilote les backends};
+  \node[callout, minimum width=13.4cm] at (6.4,-0.9)
+    {Cinder gère l'existence et l'accès des volumes ; les données restent sur les backends.};
+\end{tikzpicture}}
+\caption{Cinder et ses voisins. Le client demande un volume (1) après validation du token (2). Nova l'attache à une
+instance (3). Cinder pilote les backends où les données sont écrites (4) ; Glance et Swift échangent des images et des
+sauvegardes.}
+\label{fig:ci-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : volumes, snapshots, sauvegardes}\label{sec:ci-concepts}
+% ---------------------------------------------------------------------
+
+Quatre objets reviennent dans tout le chapitre (tableau~\ref{tab:ci-objets}). Le \gls{typevolume} est la clé
+du multi-backend : il oriente un volume vers un \gls{backendcinder} et lui donne ses qualités de service
+(section~\ref{sec:ci-types}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{8.0cm}>{\raggedright\arraybackslash\ttfamily}p{4.5cm}@{}}
+\toprule
+\textbf{Objet} & \textbf{Définition} & \textrm{\textbf{Commande}} \\
+\midrule
+\Gls{volume} & Disque persistant d'une taille donnée, créé sur un backend et attaché à une instance à la fois (ou à plusieurs, voir plus bas). & openstack volume create \\
+\Gls{snapshot} & Image ponctuelle d'un volume, gardée sur le même backend ; création rapide (copie sur écriture). & openstack volume snapshot create \\
+\Gls{sauvegarde} & Copie complète ou incrémentale d'un volume vers un dépôt distinct, par défaut Swift. & openstack volume backup create \\
+\Gls{typevolume} & Étiquette portant des propriétés (\emph{extra specs}) : backend visé, qualité de service. & openstack volume type create \\
+\bottomrule
+\end{tabular}
+\caption{Les objets de Cinder \parencite{cinder-backups}.}
+\label{tab:ci-objets}
+\end{table}
+
+Cinder n'est pas le seul service de stockage. Chacun répond à un besoin différent et ils se combinent
+(tableau~\ref{tab:ci-stockages}) : volumes sur Cinder, images sur Glance, sauvegardes et médias sur Swift.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.0cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{4.6cm}@{}}
+\toprule
+\textbf{Service} & \textbf{Type} & \textbf{Usage typique} & \textbf{Accès} \\
+\midrule
+Cinder & Bloc & Disque d'une instance, base de données & Vu comme un disque par le système \\
+Glance & Images & Modèles pour créer des instances & Utilisé en interne par Nova \\
+Swift & Objet & Fichiers, sauvegardes, médias, journaux & API REST (HTTP), sans montage \\
+\bottomrule
+\end{tabular}
+\caption{Trois formes de stockage (support de cours, chapitre~3).}
+\label{tab:ci-stockages}
+\end{table}
+
+\paragraph{Statuts d'un volume.} L'état d'un volume évolue au fil des opérations (figure~\ref{fig:ci-statuts}). Seul un volume
+\texttt{available} peut être attaché. Une opération en échec laisse un statut d'erreur :
+\texttt{error} à la création, \texttt{error\_\allowbreak deleting}, \texttt{error\_\allowbreak extending}\dots{}
+\parencite{api-block-storage}. Le statut \texttt{reserved} indique un volume réservé pour un attachement ou mis de côté
+(\emph{shelved}) ; \texttt{backing-up} et \texttt{restoring-backup} accompagnent les sauvegardes.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    etat/.style={pastille, psvc, minimum width=2.4cm, font=\scriptsize\bfseries}]
+  \node[pcli, minimum width=2.4cm, font=\scriptsize\bfseries] (cr) at (0,2.2) {creating};
+  \node[pfoc, minimum width=2.4cm, font=\scriptsize\bfseries] (av) at (3.6,2.2) {available};
+  \node[etat] (at) at (7.2,2.2) {attaching};
+  \node[etat] (iu) at (10.8,2.2) {in-use};
+  \node[etat] (dt) at (10.8,0.0) {detaching};
+  \node[etat] (ex) at (7.2,4.4) {extending};
+  \node[etat] (dl) at (3.6,4.4) {deleting};
+  \node[pdat, minimum width=2.4cm, font=\scriptsize\bfseries] (er) at (0,4.4) {error};
+  \draw[fluxo] (cr) -- (av);
+  \draw[fluxo] (av) -- (at) node[etiqf, midway, above=1pt] {attacher};
+  \draw[fluxo] (at) -- (iu);
+  \draw[fluxo] (iu) -- (dt) node[etiqf, midway, right=3pt] {détacher};
+  \draw[fluxo] (dt.west) -| (av.south);
+  \node[etiqf] at (7.2,0.3) {volume libéré};
+  \draw[<->, thick, insaorange] (av.north east) -- (ex.south west)
+    node[etiqf, midway, right=2pt] {agrandir};
+  \draw[fluxo] (av.north) -- (dl.south) node[etiqf, midway, right=2pt] {supprimer};
+  \draw[fluxd] (cr.north) -- (er.south) node[etiqf, midway, right=2pt] {échec};
+  \node[callout, minimum width=12.4cm] at (5.4,-1.3)
+    {Seul un volume \texttt{available} s'attache ; en cas d'échec, le volume reste en \texttt{error}.};
+\end{tikzpicture}}
+\caption{Cycle de vie d'un volume. La création mène à \texttt{available} ; l'attachement passe par \texttt{attaching}
+puis \texttt{in-use}, le détachement par \texttt{detaching}.}
+\label{fig:ci-statuts}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Architecture interne}\label{sec:ci-archi}
+% ---------------------------------------------------------------------
+
+Le service se compose de quatre processus qui communiquent par un bus de messages, et d'une base de données
+(tableau~\ref{tab:ci-composants}) \parencite{cinder-components}. La figure~\ref{fig:ci-archi} suit la création d'un volume.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{3.4cm}>{\raggedright\arraybackslash}p{12.1cm}@{}}
+\toprule
+\textrm{\textbf{Composant}} & \textbf{Rôle} \\
+\midrule
+cinder-api & Reçoit les requêtes REST (port 8776) et les transmet aux autres processus. \\
+cinder-scheduler & Choisit le backend le plus adapté à un nouveau volume, comme \texttt{nova-scheduler} pour les instances. \\
+cinder-volume & Pilote un backend par un \emph{driver} ; peut tourner sur plusieurs nœuds de stockage. \\
+cinder-backup & Sauvegarde des volumes vers un dépôt, lui aussi accessible par un driver. \\
+Base de données & Mémorise volumes, snapshots, types et statuts. \\
+\bottomrule
+\end{tabular}
+\caption{Composants de Cinder \parencite{cinder-components}.}
+\label{tab:ci-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,5.7) rectangle (10.4,9.1);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,9.0) {Nœud contrôleur};
+  \node[pfoc, minimum width=2.8cm] (api) at (2.6,7.2) {cinder-api\\ {\scriptsize\mdseries port 8776}};
+  \node[psvc, minimum width=3.2cm] (sch) at (7.6,7.2) {cinder-scheduler\\ {\scriptsize\mdseries choix du backend}};
+  \draw[fluxr] (api) -- (sch) node[num, pos=0.2] {1} node[etiqf, midway, above=3pt] {demande};
+  \node[pdat, minimum width=3.2cm] (db) at (13.6,7.4) {Base \texttt{cinder}};
+  \draw[<->, thick, insagris] (10.4,7.4) -- (db.west);
+  \node[pgris, minimum width=15.6cm, font=\scriptsize\bfseries] (bus) at (8.0,4.7)
+    {Bus de messages (RabbitMQ) : RPC entre les processus};
+  \draw[<->, thick, insagris] (7.6,5.7) -- (7.6,5.0);
+  \draw[fluxo] (sch.south) -- (7.6,5.0) node[num, pos=0.5, right=2pt] {2};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,0.2) rectangle (9.0,3.9);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,3.8) {Nœud de stockage};
+  \node[pfoc, minimum width=2.8cm] (vol) at (2.4,2.1) {cinder-volume};
+  \node[psvc, minimum width=3.6cm, font=\scriptsize\bfseries] (drv) at (6.6,2.1) {drivers\\ {\scriptsize\mdseries LVM, Ceph RBD, NFS\dots}};
+  \draw[fluxr] (vol) -- (drv) node[num, pos=0.5, above=3pt] {3};
+  \draw[<->, thick, insagris] (2.4,3.9) -- (2.4,4.4);
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (10.0,0.2) rectangle (15.8,3.9);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (10.15,3.8) {Nœud de sauvegarde};
+  \node[psvc, minimum width=2.8cm] (bak) at (12.9,2.3) {cinder-backup};
+  \node[pgris, minimum width=4.6cm, font=\scriptsize\bfseries] (rep) at (12.9,0.9) {Dépôt : Swift, NFS\dots};
+  \draw[fluxo] (bak) -- (rep);
+  \draw[<->, thick, insagris] (12.9,3.9) -- (12.9,4.4);
+  \node[pgris, minimum width=9.0cm] (bk) at (4.6,-1.0) {Backends : disques LVM, cluster Ceph, serveur NFS};
+  \draw[fluxo] (drv.south) -- (6.6,-0.65);
+  \node[callout, minimum width=15.6cm] at (8.0,-2.2)
+    {Pour l'utilisateur, rien ne change d'un backend à l'autre : la requête est la même, c'est le driver qui la traduit.};
+\end{tikzpicture}}
+\caption{Création d'un volume. L'API transmet la demande (1) ; le scheduler choisit un backend et l'envoie par le bus à
+\texttt{cinder-volume} (2) ; celui-ci crée le volume sur le backend par le driver (3).}
+\label{fig:ci-archi}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Backends, types de volume et qualité de service}\label{sec:ci-types}
+% ---------------------------------------------------------------------
+
+Une même installation pilote plusieurs technologies à la fois : LVM, Ceph, NFS, baies SAN\dots{} Chaque backend est
+une section de \texttt{cinder.conf} déclarée dans \texttt{enabled\_\allowbreak backends}, avec son driver et un nom
+(\texttt{volume\_\allowbreak backend\_\allowbreak name}) que plusieurs sections peuvent partager
+\parencite{cinder-multibackend, cinder-drivers}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+[DEFAULT]
+enabled_backends = lvm,ceph
+[lvm]
+volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+volume_group = cinder-volumes
+volume_backend_name = lvm
+[ceph]
+volume_driver = cinder.volume.drivers.rbd.RBDDriver
+rbd_pool = volumes
+rbd_ceph_conf = /etc/ceph/ceph.conf
+rbd_user = cinder
+volume_backend_name = ceph
+\end{lstlisting}
+\end{minipage}\par
+
+Le \emph{filter scheduler} retient d'abord les backends possibles par trois filtres (\texttt{AvailabilityZoneFilter},
+\texttt{CapacityFilter}, \texttt{CapabilitiesFilter}), puis il choisit celui qui a le plus de place libre
+(\texttt{CapacityWeigher}) \parencite{cinder-multibackend}. Le type de volume relie la demande au backend :
+ses propriétés doivent correspondre à celles qu'annonce le backend (figure~\ref{fig:ci-types}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=3.2cm, text width=3.0cm] (u) at (0,2.4)
+    {Utilisateur\\ {\scriptsize\mdseries \texttt{--type gold}}};
+  \node[psvc, minimum width=3.6cm, text width=3.4cm] (g) at (5.0,3.8)
+    {Type \texttt{gold}\\ {\scriptsize\mdseries backend = ceph}};
+  \node[psvc, minimum width=3.6cm, text width=3.4cm] (b) at (5.0,1.0)
+    {Type \texttt{bronze}\\ {\scriptsize\mdseries backend = lvm}};
+  \node[pdat, minimum width=3.0cm, text width=2.8cm] (q) at (5.0,5.7) {QoS \texttt{high-iops}\\ {\scriptsize\mdseries IOPS limités}};
+  \draw[<->, thick, insagris] (q.south) -- (g.north);
+  \node[pfoc, minimum width=3.6cm, text width=3.4cm] (s) at (10.0,2.4) {cinder-scheduler\\ {\scriptsize\mdseries CapabilitiesFilter}};
+  \node[pgris, minimum width=3.0cm] (ce) at (14.6,3.8) {Backend Ceph};
+  \node[pgris, minimum width=3.0cm] (lv) at (14.6,1.0) {Backend LVM};
+  \draw[fluxr] (u.east) -- (g.west) node[num, pos=0.45, above=3pt] {1};
+  \draw[fluxd] (u.east) -- (b.west);
+  \draw[fluxo] (g.east) -- (s.west) node[num, pos=0.5, above=3pt] {2};
+  \draw[fluxd] (b.east) -- (s.west);
+  \draw[fluxo] (s.east) -- (ce.west) node[num, pos=0.5, above=3pt] {3};
+  \draw[fluxd] (s.east) -- (lv.west);
+  \node[callout, minimum width=14.6cm] at (7.3,-0.6)
+    {Trait plein : le chemin d'un volume \texttt{gold}. Pointillé : le chemin d'un volume \texttt{bronze}.};
+\end{tikzpicture}}
+\caption{Le type de volume oriente vers un backend. L'utilisateur choisit un type (1) ; ses propriétés sont comparées à
+celles des backends (2) ; le scheduler retient le backend correspondant (3). Une QoS peut être associée au type.}
+\label{fig:ci-types}
+\end{figure}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack volume type create gold
+$ openstack volume type set gold --property volume_backend_name=ceph
+$ openstack volume create --type gold --size 50 db-volume
+\end{lstlisting}
+\end{minipage}\par
+
+Depuis la version Train, tout volume a un type : le type \texttt{\_\_DEFAULT\_\_} est créé à la migration, et l'option
+\texttt{default\_\allowbreak volume\_\allowbreak type} de \texttt{cinder.conf} désigne celui qu'on applique quand l'utilisateur n'en
+précise pas. Un type par défaut peut aussi être fixé par projet \parencite{cinder-default-types}.
+
+\paragraph{Qualité de service.} Une \gls{qos} limite le débit d'un volume : opérations par seconde (\texttt{read\_iops\_sec},
+\texttt{write\_iops\_sec}, \texttt{total\_iops\_sec}) ou octets par seconde (\texttt{read\_bytes\_sec}\dots). Son
+\emph{consumer} dit où la limite s'applique : \texttt{front-end} (sur l'hôte de calcul, ce qui exige le pilote libvirt de Nova),
+\texttt{back-end} ou les deux. On l'associe ensuite à un type \parencite{cinder-qos}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack volume qos create --consumer front-end \
+    --property read_iops_sec=5000 --property write_iops_sec=5000 high-iops
+$ openstack volume qos associate high-iops gold
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{remarque}[Volume attaché à plusieurs instances]
+Un type dont la propriété \texttt{multiattach} vaut \texttt{<is> True} permet d'attacher un volume à plusieurs instances,
+si le backend le gère. Il faut alors un système de fichiers pour accès multiples (en grappe) ; sinon les données risquent
+d'être corrompues. Le chiffrement est incompatible avec cette option \parencite{cinder-multiattach}.
+\end{remarque}
+
+% ---------------------------------------------------------------------
+\subsection{Attacher un volume à une instance}\label{sec:ci-attache}
+% ---------------------------------------------------------------------
+
+Cinder gère l'état et l'accès du volume ; c'est Nova qui le connecte à l'hôte, avec la bibliothèque \gls{osbrick}
+(figure~\ref{fig:ci-seq}). Trois temps se succèdent : réserver le volume, qui passe en \texttt{attaching} ;
+initialiser la connexion, où le driver crée l'accès et renvoie les informations de connexion (cible iSCSI, portail,
+LUN, identifiants) ; finaliser, qui met le volume en \texttt{in-use} \parencite{cinder-attach}. Le détachement suit le chemin
+inverse.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (n) at (0.8,0) {Nova};
+  \node[acteur, minimum width=2.6cm, fill=insarouge, text=white, draw=black] (a) at (5.2,0) {cinder-api};
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (v) at (9.6,0) {cinder-\\volume};
+  \node[acteur, minimum width=2.6cm, fill=insagris!12, draw=insagris] (s) at (14.0,0) {Backend de\\ stockage};
+  \foreach \x in {n,a,v,s} \draw[vie] (\x.south) -- ++(0,-8.0);
+  \seqmsg{0.8}{5.2}{-1.3}{1}{réserver le volume\\ (\texttt{attaching})}
+  \seqmsg{0.8}{5.2}{-2.5}{2}{initialiser la connexion\\ (connecteur de l'hôte)}
+  \seqmsg{5.2}{9.6}{-3.5}{3}{créer l'accès\\ au volume}
+  \node[callout, font=\scriptsize, text width=3.4cm] at (12.0,-3.5) {le driver prépare par exemple une cible iSCSI};
+  \seqrep{9.6}{5.2}{-4.4}{}{accès prêt}
+  \seqrep{5.2}{0.8}{-5.3}{}{informations de connexion\\ (cible, portail, LUN)}
+  \seqmsg{0.8}{14.0}{-6.4}{4}{session iSCSI ouverte par \texttt{os-brick}}
+  \seqmsg{0.8}{5.2}{-7.5}{5}{finaliser (\texttt{in-use})}
+\end{tikzpicture}}
+\caption{Attachement d'un volume. Nova réserve le volume (1), demande les informations de connexion (2) que le driver
+prépare (3), ouvre la session vers le stockage (4), puis signale la fin de l'attachement (5).}
+\label{fig:ci-seq}
+\end{figure}
+
+Avec LVM, le nœud de calcul ouvre une session iSCSI vers le nœud de stockage : un disque local (en général
+\texttt{/dev/sdX}) apparaît, que libvirt présente à l'instance comme un nouveau disque \parencite{cinder-manage-volumes}.
+On peut aussi démarrer une instance \emph{depuis} un volume : le disque racine est alors un volume, qui n'est pas supprimé
+avec l'instance \parencite{nova-boot-volume}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack server create --flavor m1.small --network private \
+    --boot-from-volume 20 --image ubuntu vm2
+$ openstack server create --flavor m1.small --network private \
+    --volume data-volume vm3
+\end{lstlisting}
+\end{minipage}\par
+
+La première commande crée un volume de 20~Go à partir de l'image et démarre dessus ; la seconde démarre sur un volume
+déjà préparé. Pour accélérer la création de volumes à partir d'une même image, le \emph{cache d'image-volume}
+(\texttt{image\_\allowbreak volume\_\allowbreak cache\_\allowbreak enabled = True}) clone un volume déjà créé au lieu de retélécharger l'image
+\parencite{cinder-image-cache}.
+
+% ---------------------------------------------------------------------
+\subsection{Protéger, copier et déplacer les données}\label{sec:ci-donnees}
+% ---------------------------------------------------------------------
+
+Un snapshot et une sauvegarde ne protègent pas contre les mêmes risques (tableau~\ref{tab:ci-protection}). Le snapshot
+reste sur le backend du volume : il sert au retour arrière et au clonage, mais disparaît avec le backend. La
+sauvegarde va dans un dépôt séparé, par défaut Swift, ou NFS selon le driver ; la première est complète, les suivantes
+peuvent être incrémentales \parencite{cinder-backups}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{6.0cm}>{\raggedright\arraybackslash}p{6.3cm}@{}}
+\toprule
+ & \textbf{Snapshot} & \textbf{Sauvegarde} \\
+\midrule
+Emplacement & Même backend que le volume. & Dépôt distinct (Swift par défaut, NFS\dots). \\
+Création & Rapide (copie sur écriture). & Plus longue ; complète, puis incrémentale possible. \\
+Usage & Retour arrière, clonage. & Reprise après sinistre. \\
+Perte du backend & Perdu avec le volume. & Conservée dans le dépôt. \\
+\bottomrule
+\end{tabular}
+\caption{Snapshot et sauvegarde (support de cours, chapitre~3 ; \cite{cinder-backups}).}
+\label{tab:ci-protection}
+\end{table}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack volume snapshot create --volume db-volume snap-db
+$ openstack volume create --snapshot snap-db db-restored
+$ openstack volume create --source db-volume db-clone
+$ openstack volume backup create --name sav-1 db-volume
+$ openstack volume backup create --incremental --name sav-2 db-volume
+$ openstack volume backup restore sav-2 db-restored
+$ openstack volume set --size 20 data-volume
+\end{lstlisting}
+\end{minipage}\par
+
+Dans l'ordre : un snapshot, un volume recréé depuis ce snapshot, un clone, une sauvegarde complète, une sauvegarde
+incrémentale, sa restauration dans un nouveau volume, puis l'agrandissement d'un volume.
+
+Quelques règles à connaître. Pour un volume attaché, le snapshot exigeait l'option \texttt{--force} avant la version 3.66
+de l'API (elle est ignorée depuis) \parencite{osc-volume-snapshot} ; la sauvegarde d'un volume \texttt{in-use} exige
+\texttt{--force} et n'est cohérente qu'après un arrêt brutal (\emph{crash-consistent}) \parencite{cinder-backups}. Agrandir un
+volume demande qu'il soit \texttt{available}, sauf à utiliser la version 3.42 de l'API, qui l'autorise attaché
+\parencite{cinder-cli-volumes}. Enfin, un administrateur peut déplacer un volume vers un autre backend
+(\texttt{openstack volume migrate --host}), à condition qu'il n'ait pas de snapshot ; Cinder s'appuie sur le backend s'il
+sait le faire, sinon il copie les données \parencite{cinder-migration}.
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre}\label{sec:ci-deploiement}
+% ---------------------------------------------------------------------
+
+L'installation se fait sur deux types de nœuds. Sur le contrôleur : une base \texttt{cinder}, l'utilisateur \texttt{cinder} dans
+Keystone, le service de type \texttt{block-storage} avec ses trois endpoints sur \texttt{http://controller:8776/v3}, les paquets
+\texttt{cinder-api} et \texttt{cinder-scheduler}, puis \texttt{cinder-manage db sync} \parencite{cinder-install-controller}.
+Sur chaque nœud de stockage, avec LVM, on prépare un groupe de volumes et on installe \texttt{cinder-volume}
+\parencite{cinder-install-storage} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# pvcreate /dev/sdb
+# vgcreate cinder-volumes /dev/sdb
+# apt install cinder-volume tgt
+\end{lstlisting}
+\end{minipage}\par
+
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/cinder/cinder.conf (nœud de stockage, extrait)
+[DEFAULT]
+enabled_backends = lvm
+transport_url = rabbit://openstack:RABBIT_PASS@controller
+my_ip = MANAGEMENT_INTERFACE_IP_ADDRESS
+[database]
+connection = mysql+pymysql://cinder:CINDER_DBPASS@controller/cinder
+[keystone_authtoken]
+# auth_url, username, password : le compte de service cinder
+[lvm]
+volume_driver = cinder.volume.drivers.lvm.LVMVolumeDriver
+volume_group = cinder-volumes
+target_protocol = iscsi
+target_helper = tgtadm
+[oslo_concurrency]
+lock_path = /var/lib/cinder/tmp
+\end{lstlisting}
+\end{minipage}\par
+
+Côté Nova, la section \texttt{[cinder]} de \texttt{nova.conf} indique la région (\texttt{os\_region\_name}). On vérifie
+l'installation avec \texttt{openstack volume service list}, qui doit montrer \texttt{cinder-scheduler} et \texttt{cinder-volume}
+à l'état \texttt{up}. Le tableau~\ref{tab:ci-pannes} résume les pannes courantes.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{5.8cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Volume en \texttt{error} dès la création & Aucun backend ne convient : propriétés du type différentes de celles du backend, place insuffisante, service arrêté. & \texttt{openstack volume service list} ; \texttt{openstack volume type show} \\
+Volume bloqué en \texttt{creating} & \texttt{cinder-volume} ou le bus de messages ne répond pas. & \texttt{openstack volume service list} ; journaux \\
+Attachement impossible & Le nœud de calcul ne joint pas la cible iSCSI. & Réseau de stockage ; journaux de Nova et de Cinder \\
+Sauvegarde en \texttt{error} & Dépôt injoignable (Swift arrêté, partage NFS absent). & État du dépôt ; journaux de \texttt{cinder-backup} \\
+Agrandissement refusé & Volume non \texttt{available} (avant la version 3.42 de l'API). & \texttt{openstack volume show} \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Cinder.}
+\label{tab:ci-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:ci-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Deux offres de stockage}\label{ex:ci-types}
+Une plateforme propose une offre « rapide » sur Ceph, limitée à 5\,000 opérations par seconde au total, et
+une offre « économique » sur LVM. Écrire les commandes qui créent les deux types, la QoS, puis un volume de 50~Go de type
+« rapide ». Que faut-il avoir dans \texttt{cinder.conf} pour que cela fonctionne ?
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}[style=terminal]
+$ openstack volume type create rapide
+$ openstack volume type set rapide --property volume_backend_name=ceph
+$ openstack volume type create economique
+$ openstack volume type set economique --property volume_backend_name=lvm
+$ openstack volume qos create --consumer front-end --property total_iops_sec=5000 iops5000
+$ openstack volume qos associate iops5000 rapide
+$ openstack volume create --type rapide --size 50 db
+\end{lstlisting}
+Chaque backend doit être listé dans \texttt{enabled\_\allowbreak backends}, avec son driver et un \texttt{volume\_\allowbreak backend\_\allowbreak name}
+égal à la valeur des types (\texttt{ceph}, \texttt{lvm}) : sinon le filtre de capacités écarte tous les backends.
+\end{correction}
+
+\begin{exercice}{Protéger une base de données}\label{ex:ci-protection}
+Un volume de base de données est sur un backend LVM. (a)~Un snapshot le protège-t-il d'une panne du disque du nœud de
+stockage ? (b)~Quelle protection choisir, et vers où ? (c)~Comment revenir à l'état de la veille, et comment reconstruire le volume
+après la perte du nœud ?
+\end{exercice}
+\begin{correction}
+(a)~Non : le snapshot reste sur le même backend et disparaît avec lui. (b)~Une sauvegarde, vers un dépôt distinct : Swift par défaut.
+La première est complète, les suivantes peuvent être incrémentales (\texttt{--incremental}). (c)~Retour à la veille :
+\texttt{openstack volume create --snapshot} pour recréer un volume depuis le snapshot. Après la perte du nœud :
+\texttt{openstack volume backup restore} depuis la sauvegarde.
+\end{correction}
+
+\begin{exercice}{Diagnostiquer}\label{ex:ci-diag}
+Un utilisateur crée un volume de type \texttt{rapide} : il passe aussitôt en \texttt{error}. Quelles vérifications faire, dans
+l'ordre ?
+\end{exercice}
+\begin{correction}
+1.~Les services : \texttt{openstack volume service list} montre-t-il \texttt{cinder-volume} \texttt{up} pour le backend Ceph ?
+2.~Le type : \texttt{openstack volume type show rapide}, la valeur de \texttt{volume\_\allowbreak backend\_\allowbreak name} est-elle celle du backend ?
+3.~La capacité : reste-t-il de la place sur le backend (filtre de capacité) ? 4.~Les journaux du scheduler, qui indiquent
+pourquoi aucun backend n'a été retenu.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:ci-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Cinder fournit des volumes persistants, indépendants du cycle de vie des instances ; il pilote des backends
+        (LVM, Ceph, NFS, SAN) par des drivers.
+  \item Quatre processus : \texttt{cinder-api}, \texttt{cinder-scheduler}, \texttt{cinder-volume}, \texttt{cinder-backup}, reliés par
+        un bus de messages et une base.
+  \item Le type de volume oriente vers un backend (\texttt{volume\_\allowbreak backend\_\allowbreak name}) et porte une QoS ; tout volume
+        a un type (\texttt{\_\_DEFAULT\_\_} sinon).
+  \item L'attachement se fait en trois temps (réserver, initialiser la connexion, finaliser) ; Nova connecte l'hôte avec \texttt{os-brick}.
+  \item Un snapshot reste sur le backend ; une sauvegarde va dans un dépôt distinct (Swift par défaut).
+  \item On peut démarrer une instance depuis un volume ; ce volume n'est pas supprimé avec elle.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{9.9cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer et attacher & \texttt{openstack volume create --size 10 V}, \texttt{openstack server add volume S V} & \ref{sec:ci-role} \\
+Types et QoS & \texttt{openstack volume type set T --property volume\_backend\_name=B}, \texttt{openstack volume qos associate Q T} & \ref{sec:ci-types} \\
+Snapshot, clone & \texttt{openstack volume snapshot create --volume V N}, \texttt{openstack volume create --source V C} & \ref{sec:ci-donnees} \\
+Sauvegarde & \texttt{openstack volume backup create [--incremental] V}, \texttt{backup restore B V} & \ref{sec:ci-donnees} \\
+Démarrer sur un volume & \texttt{openstack server create --volume V S} & \ref{sec:ci-attache} \\
+Vérifier les services & \texttt{openstack volume service list} & \ref{sec:ci-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Configurer deux backends et des types de volume avec QoS (exercice~\ref{ex:ci-types}).
+  \item Choisir entre snapshot et sauvegarde selon le risque (exercice~\ref{ex:ci-protection}).
+  \item Diagnostiquer un volume en erreur à la création (exercice~\ref{ex:ci-diag}).
+\end{itemize}
+\end{savoirfaire}

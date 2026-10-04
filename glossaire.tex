@@ -228,3 +228,38 @@
 
 \newglossaryentry{nat}{name={NAT}, sort={NAT},
   description={Traduction d'adresses réseau : le routeur remplace l'adresse source ou destination d'un paquet (SNAT pour la sortie, DNAT pour l'entrée)}}
+
+% ---- Cinder -----------------------------------------------------------
+\newglossaryentry{volume}{name={volume}, sort={volume},
+  description={Disque virtuel persistant fourni par Cinder : il a une taille et un type, et peut être attaché à une instance, détaché, puis rattaché ailleurs sans perdre ses données}}
+
+\newglossaryentry{snapshot}{name={snapshot}, sort={snapshot},
+  description={Image ponctuelle d'un volume, conservée sur le même backend ; elle sert au retour arrière et au clonage, mais disparaît avec le backend}}
+
+\newglossaryentry{sauvegarde}{name={sauvegarde (backup)}, sort={sauvegarde}, text={sauvegarde},
+  description={Copie complète ou incrémentale d'un volume vers un dépôt distinct (Swift par défaut) ; elle survit à la perte du backend}}
+
+\newglossaryentry{typevolume}{name={type de volume}, sort={type de volume}, plural={types de volume},
+  description={Étiquette qui porte des propriétés (\emph{extra specs}) : backend visé, qualité de service, accès multiple ; Cinder s'en sert pour choisir le backend d'un volume}}
+
+\newglossaryentry{backendcinder}{name={backend (Cinder)}, sort={backend}, text={backend}, plural={backends},
+  description={Système de stockage qui héberge réellement les volumes (LVM, Ceph, NFS, baie SAN) ; \texttt{cinder-volume} le pilote par un driver}}
+
+\newglossaryentry{qos}{name={QoS (qualité de service)}, sort={QoS}, text={QoS},
+  description={Limite de débit appliquée à un volume, en opérations ou en octets par seconde ; elle s'associe à un type de volume}}
+
+\newglossaryentry{osbrick}{name={os-brick}, sort={os-brick},
+  description={Bibliothèque qui connecte un hôte à un volume (iSCSI, RBD, NFS\dots) ; Nova l'utilise sur le nœud de calcul pour attacher les volumes}}
+
+% ---- Horizon ----------------------------------------------------------
+\newglossaryentry{django}{name={Django}, sort={Django},
+  description={Cadriciel Web en Python sur lequel est écrit Horizon ; il fournit les sessions, l'authentification par des backends et le système de gabarits}}
+
+\newglossaryentry{dashboard}{name={dashboard (tableau de bord)}, sort={dashboard}, text={dashboard},
+  description={Entrée de la navigation principale d'Horizon (\emph{Project}, \emph{Admin}, \emph{Identity}, \emph{Settings}) ; il regroupe des groupes de panneaux}}
+
+\newglossaryentry{panneau}{name={panneau (panel)}, sort={panneau}, text={panneau}, plural={panneaux},
+  description={Page de la navigation latérale d'un dashboard, déclarée dans un fichier \texttt{panel.py} ; elle a ses routes, ses vues et ses gabarits}}
+
+\newglossaryentry{memcached}{name={memcached}, sort={memcached},
+  description={Service de cache en mémoire, partagé entre processus et serveurs ; Horizon l'utilise couramment pour conserver les sessions}}

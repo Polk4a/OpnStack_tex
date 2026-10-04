@@ -2,10 +2,514 @@
 %  Chapitre « Horizon : le tableau de bord »
 %  Fichier importé par main.tex avec \include{chap_horizon}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Introduction à OpenStack » (partie 10) et documentation
+%  officielle d'Horizon et du guide de sécurité (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Horizon : le tableau de bord}\label{chap:horizon}
+% =====================================================================
+
+Horizon est l'interface Web d'OpenStack. Ce chapitre présente son rôle, la façon dont il organise l'interface en
+dashboards et en panneaux, son architecture, le parcours d'une requête, puis l'installation, la personnalisation, la
+sécurisation et le dépannage.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place d'Horizon}\label{sec:ho-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Horizon}
+Horizon est l'implémentation de référence du tableau de bord d'OpenStack : une interface Web qui donne accès aux
+services (Nova, Cinder, Neutron, Glance, Swift, Keystone\dots) \parencite{horizon-docs}. C'est une application
+\gls{django} qui appelle les API REST des services avec les droits de l'utilisateur connecté.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Rendre la plateforme utilisable sans ligne de commande, par les utilisateurs d'un projet comme par
+        les administrateurs.
+  \item \textbf{Communique avec.} Keystone, indispensable pour la connexion, puis les API des autres services, que
+        Horizon détecte automatiquement (Nova, Cinder, Glance, Neutron, Swift) \parencite{horizon-requirements} ; un cache
+        pour conserver les sessions.
+  \item \textbf{Exemple.} créer un volume dans le panneau \emph{Volumes} du dashboard \emph{Project} envoie à Cinder la
+        même requête que la commande suivante :
+\begin{lstlisting}[style=terminal]
+$ openstack volume create --size 10 data-volume
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=3.0cm] (nav) at (1.4,4.4) {Navigateur Web};
+  \node[pcli, minimum width=3.0cm] (cli) at (1.4,1.0) {CLI \texttt{openstack}};
+  \node[pfoc, minimum width=3.4cm, minimum height=1.3cm] (ho) at (6.0,4.4) {Horizon\\ {\scriptsize\mdseries tableau de bord}};
+  \node[pdat, minimum width=3.0cm] (ca) at (6.0,6.9) {Cache de sessions\\ {\scriptsize\mdseries memcached}};
+  \node[psvc, minimum width=3.0cm] (ks) at (13.0,6.5) {Keystone};
+  \node[psvc, minimum width=3.0cm] (api) at (13.0,3.4) {API des services\\ {\scriptsize\mdseries Nova, Cinder, Neutron,}\\ {\scriptsize\mdseries Glance, Swift\dots}};
+  \draw[fluxr] (nav) -- (ho)
+    node[num, midway, above=3pt] {1} node[etiqf, midway, below=2pt] {HTTPS};
+  \draw[<->, thick, insagris] (ho.north) -- (ca.south)
+    node[etiqf, midway, right=3pt] {sessions};
+  \draw[fluxo] (ho.east) -- (ks.west)
+    node[num, pos=0.1, above=4pt] {2} node[etiqf, pos=0.54, sloped, above=1pt] {authentifie (token)};
+  \draw[fluxo] (ho.east) -- (api.west)
+    node[num, pos=0.1, below=4pt] {3} node[etiqf, pos=0.54, sloped, above=1pt] {appels REST + token};
+  \draw[fluxo] (cli.east) -| (api.south);
+  \node[etiqf] at (8.0,1.0) {mêmes API REST};
+  \node[callout, minimum width=14.4cm] at (7.3,-0.5)
+    {Horizon est un client des API, comme la CLI : il n'a pas de pouvoir propre.};
+\end{tikzpicture}}
+\caption{Horizon et son environnement. Le navigateur s'adresse à Horizon (1) ; celui-ci authentifie l'utilisateur auprès de
+Keystone (2) puis appelle les API des services avec son token (3). La CLI appelle les mêmes API.}
+\label{fig:ho-env}
+\end{figure}
+
+Horizon n'est donc pas indispensable au fonctionnement de la plateforme : tout ce qu'il fait passe par les API REST, que la
+CLI appelle aussi (support de cours, partie 10). Une action possible dans l'un l'est presque toujours dans l'autre.
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : dashboards et panneaux}\label{sec:ho-concepts}
+% ---------------------------------------------------------------------
+
+L'interface est organisée en \glspl{dashboard}, les entrées de la navigation principale. Chacun regroupe des groupes de
+\glspl{panneau}, les pages de la navigation latérale \parencite{horizon-intro, horizon-quickstart}. La figure~\ref{fig:ho-hier}
+en donne un aperçu.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=2.4cm, minimum height=1.3cm] (h) at (0.4,3.0) {Horizon};
+  \node[psvc, minimum width=3.0cm] (p) at (4.6,5.7) {Project\\ {\scriptsize\mdseries tout utilisateur}};
+  \node[psvc, minimum width=3.0cm] (a) at (4.6,3.9) {Admin\\ {\scriptsize\mdseries rôle \texttt{admin}}};
+  \node[psvc, minimum width=3.0cm] (i) at (4.6,2.1) {Identity\\ {\scriptsize\mdseries selon les droits}};
+  \node[psvc, minimum width=3.0cm] (s) at (4.6,0.3) {Settings\\ {\scriptsize\mdseries tout utilisateur}};
+  \node[pgris, text width=7.4cm] (pp) at (11.6,5.7) {Compute : Instances, Images, Key Pairs\\ Volumes : Volumes, Snapshots, Backups\\ Network : Networks, Routers, Security Groups};
+  \node[pgris, text width=7.4cm] (pa) at (11.6,3.9) {Compute : Hypervisors, Host Aggregates, Flavors\\ Volume : Volume Types\\ System : Defaults, System Information};
+  \node[pgris, text width=7.4cm] (pi) at (11.6,2.1) {Projects \ $\cdot$ \ Users \ $\cdot$ \ Groups \ $\cdot$ \ Roles};
+  \node[pgris, text width=7.4cm] (ps) at (11.6,0.3) {User Settings \ $\cdot$ \ Change Password};
+  \foreach \d in {p,a,i,s} \draw[fluxr] (h.east) -- (\d.west);
+  \draw[fluxo] (p) -- (pp);
+  \draw[fluxo] (a) -- (pa);
+  \draw[fluxo] (i) -- (pi);
+  \draw[fluxo] (s) -- (ps);
+  \node[etiqf] at (4.6,6.7) {dashboards};
+  \node[etiqf] at (11.6,6.7) {groupes et panneaux (exemples)};
+  \node[callout, minimum width=15.0cm] at (7.2,-1.1)
+    {Les panneaux visibles dépendent des services installés et des rôles de l'utilisateur.};
+\end{tikzpicture}}
+\caption{Organisation de l'interface. Chaque dashboard contient des groupes de panneaux. Les noms de panneaux sont des
+exemples : ils varient avec la version et les services présents.}
+\label{fig:ho-hier}
+\end{figure}
+
+Ce que l'utilisateur voit dépend de deux choses. D'abord des services installés : Horizon détecte automatiquement Cinder,
+Glance, Neutron, Nova et Swift, et les autres services s'ajoutent par des plugins \parencite{horizon-requirements}, par
+exemple pour Trove, Octavia ou Heat. Ensuite de ses rôles : les permissions d'un utilisateur dérivent des rôles que
+Keystone lui attribue \parencite{horizon-auth-backend}, et un panneau peut exiger une permission ou une règle de \gls{policy}
+\parencite{horizon-quickstart}. Ainsi, le dashboard \emph{Admin} est réservé aux administrateurs. Le dashboard est aussi
+l'unité d'extension : on l'ajoute, on le désactive ou on lui retire un panneau par un fichier de configuration
+(section~\ref{sec:ho-perso}).
+
+% ---------------------------------------------------------------------
+\subsection{Architecture d'Horizon}\label{sec:ho-archi}
+% ---------------------------------------------------------------------
+
+Le projet contient deux composants. Le répertoire \texttt{horizon} est une bibliothèque générique, utilisable dans n'importe
+quel projet Django ; \texttt{openstack\_\allowbreak dashboard} est le projet Django de référence qui s'appuie sur elle et contient les
+dashboards d'OpenStack \parencite{horizon-quickstart}. L'authentification est confiée au module \texttt{openstack\_\allowbreak auth}, un
+backend d'authentification de Django qui interroge Keystone \parencite{horizon-auth-backend}. Un dashboard se déclare dans un fichier
+\texttt{dashboard.py}, un panneau dans un \texttt{panel.py} accompagné de ses routes (\texttt{urls.py}), de ses vues
+(\texttt{views.py}) et de ses gabarits \parencite{horizon-quickstart}. Une couche d'abstraction offre un accès homogène aux
+API des services \parencite{horizon-intro}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=4.2cm] (nav) at (5.0,9.0) {Navigateur};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,2.5) rectangle (10.0,7.8);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,7.7) {Apache + \texttt{mod\_wsgi} : application Django};
+  \node[pfoc, minimum width=9.0cm] (od) at (5.1,6.9) {\texttt{openstack\_\allowbreak dashboard}\\ {\scriptsize\mdseries dashboards, panneaux, gabarits}};
+  \node[psvc, minimum width=9.0cm] (hz) at (5.1,5.4) {\texttt{horizon}\\ {\scriptsize\mdseries bibliothèque Django : tables, formulaires, workflows}};
+  \node[psvc, minimum width=4.3cm] (oa) at (2.65,3.5) {\texttt{openstack\_\allowbreak auth}\\ {\scriptsize\mdseries connexion, utilisateur}};
+  \node[psvc, minimum width=4.3cm] (api) at (7.55,3.5) {Couche API\\ {\scriptsize\mdseries une abstraction par service}};
+  \node[pdat, minimum width=3.0cm] (ca) at (12.7,4.6) {Cache de sessions\\ {\scriptsize\mdseries memcached}};
+  \node[psvc, minimum width=3.0cm] (ks) at (2.65,0.5) {Keystone};
+  \node[psvc, minimum width=3.8cm] (sv) at (7.55,0.5) {API des services};
+  \draw[fluxr] (nav.south) -- (5.0,7.8)
+    node[num, pos=0.5, right=4pt] {1} node[etiqf, pos=0.5, left=3pt] {HTTPS};
+  \draw[<->, thick, insagris] (od.south) -- (hz.north) node[etiqf, midway, right=3pt] {s'appuie sur};
+  \draw[fluxo] (7.55,4.9) -- (api.north)
+    node[num, pos=0.5, right=4pt] {2};
+  \draw[fluxo] (2.65,4.9) -- (oa.north)
+    node[etiqf, pos=0.5, right=3pt] {connexion};
+  \draw[fluxo] (api.south) -- (sv.north)
+    node[num, pos=0.55, right=4pt] {3} node[etiqf, pos=0.55, left=3pt] {avec le token};
+  \draw[fluxo] (oa.south) -- (ks.north)
+    node[num, pos=0.55, right=4pt] {4} node[etiqf, pos=0.55, left=3pt, text width=1.8cm] {valide les identifiants};
+  \draw[<->, thick, insagris] (10.0,4.6) -- (ca.west) node[etiqf, midway, above=2pt] {sessions};
+  \node[callout, minimum width=13.8cm] at (7.1,-1.1)
+    {L'état de la plateforme reste dans les services ; Horizon ne garde que les sessions.};
+\end{tikzpicture}}
+\caption{Architecture d'Horizon. Une requête HTTPS arrive à Apache (1) ; la vue d'un panneau appelle la couche API (2), qui
+interroge les services avec le token de l'utilisateur (3). La connexion passe par \texttt{openstack\_\allowbreak auth}, qui interroge
+Keystone (4) ; le token est conservé en session.}
+\label{fig:ho-archi}
+\end{figure}
+
+Horizon est une application \gls{wsgi} : sur Ubuntu, le paquet \texttt{openstack-dashboard} l'installe sous Apache, dont la
+configuration se trouve dans \texttt{/etc/apache2/\allowbreak conf-available/\allowbreak openstack-dashboard.conf} \parencite{horizon-install}. Il ne
+conserve pas l'état de la plateforme : instances, volumes et réseaux restent dans les services et leurs bases. Il lui faut
+seulement un endroit où garder les sessions, le plus souvent un cache comme \gls{memcached}. Les panneaux sont, selon les cas,
+rendus côté serveur par des gabarits Django ou construits dans le navigateur avec AngularJS \parencite{horizon-customizing}.
+
+% ---------------------------------------------------------------------
+\subsection{De la connexion à l'affichage d'un panneau}\label{sec:ho-requete}
+% ---------------------------------------------------------------------
+
+À la connexion, Horizon transmet les identifiants à Keystone, qui renvoie un \gls{token} et le \gls{catalogue} de services.
+L'objet utilisateur d'\texttt{openstack\_\allowbreak auth} conserve ce token, le catalogue, le projet et les rôles
+\parencite{horizon-auth-user} ; le navigateur ne reçoit qu'un cookie de session (figure~\ref{fig:ho-seq}). Ensuite, chaque
+page se construit à partir d'appels aux API, avec le token de l'utilisateur.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.6cm] (n) at (0.8,0) {Navigateur};
+  \node[acteur, minimum width=2.6cm, fill=insarouge, text=white, draw=black] (h) at (5.2,0) {Horizon};
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (k) at (9.6,0) {Keystone};
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (c) at (14.0,0) {Cinder};
+  \foreach \x in {n,h,k,c} \draw[vie] (\x.south) -- ++(0,-10.6);
+  \seqmsg{0.8}{5.2}{-1.3}{1}{connexion\\ (identifiant, mot de passe, domaine)}
+  \seqmsg{5.2}{9.6}{-2.5}{2}{authentifier\\ (\texttt{POST /v3/auth/tokens})}
+  \seqrep{9.6}{5.2}{-3.6}{}{token + catalogue de services}
+  \node[callout, font=\scriptsize, text width=3.4cm] at (5.2,-4.6) {token, catalogue, projet et rôles gardés en session};
+  \seqrep{5.2}{0.8}{-5.7}{}{page d'accueil + cookie de session}
+  \seqmsg{0.8}{5.2}{-6.8}{3}{ouvrir le panneau Volumes\\ (cookie de session)}
+  \seqmsg{5.2}{14.0}{-7.9}{4}{\texttt{GET /v3/volumes/detail}\\ (en-tête \texttt{X-Auth-Token})}
+  \seqrep{14.0}{5.2}{-9.0}{}{liste des volumes (JSON)}
+  \seqrep{5.2}{0.8}{-10.1}{}{page HTML}
+\end{tikzpicture}}
+\caption{Connexion puis affichage du panneau \emph{Volumes}. L'utilisateur se connecte (1) ; Horizon obtient un token de
+Keystone (2). L'utilisateur ouvre ensuite le panneau (3) ; Horizon interroge Cinder avec le token (4) et renvoie la page.}
+\label{fig:ho-seq}
+\end{figure}
+
+\begin{remarque}[Horizon n'a pas de pouvoir propre]
+Horizon agit avec le token de l'utilisateur connecté : il ne peut rien faire que ses rôles ne permettent déjà en ligne de
+commande. Il peut masquer un bouton d'après les règles de \gls{policy}, mais c'est le service interrogé qui décide et, s'il
+refuse, Horizon affiche simplement l'erreur.
+\end{remarque}
+
+% ---------------------------------------------------------------------
+\subsection{Installation et configuration}\label{sec:ho-install}
+% ---------------------------------------------------------------------
+
+Il faut un endpoint Keystone accessible ; les autres services sont facultatifs \parencite{horizon-requirements}. Sur Ubuntu,
+l'installation tient en quatre gestes \parencite{horizon-install} :
+
+\begin{enumerate}
+  \item installer le paquet : \texttt{apt install openstack-dashboard} ;
+  \item éditer \texttt{/etc/\allowbreak openstack-dashboard/\allowbreak local\_\allowbreak settings.py} (listing ci-dessous) ;
+  \item ajouter la ligne \texttt{WSGIApplicationGroup \%\{GLOBAL\}} au fichier \texttt{openstack-dashboard.conf} d'Apache
+        (répertoire \texttt{/etc/apache2/conf-available}) ;
+  \item recharger Apache : \texttt{systemctl reload apache2.service}.
+\end{enumerate}
+
+Le tableau de bord est alors accessible dans un navigateur à l'adresse \texttt{http://controller/horizon} ; on s'y connecte,
+par exemple, avec l'utilisateur \texttt{admin} et le domaine \texttt{default} \parencite{horizon-verify}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/openstack-dashboard/local_settings.py (extrait)
+OPENSTACK_HOST = "controller"
+ALLOWED_HOSTS = ['one.example.com', 'two.example.com']
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+        'LOCATION': 'controller:11211',
+    }
+}
+OPENSTACK_KEYSTONE_URL = "http://%s/identity/v3" % OPENSTACK_HOST
+OPENSTACK_KEYSTONE_MULTIDOMAIN_SUPPORT = True
+OPENSTACK_KEYSTONE_DEFAULT_DOMAIN = "Default"
+OPENSTACK_API_VERSIONS = {"identity": 3, "image": 2, "volume": 3}
+TIME_ZONE = "Europe/Paris"
+\end{lstlisting}
+\end{minipage}\par
+
+L'application relit ce fichier quand Apache est rechargé. Le tableau~\ref{tab:ho-reglages} décrit les réglages les plus
+utiles ; les valeurs par défaut viennent de la référence \parencite{horizon-settings}. Pour séparer la configuration locale,
+on peut aussi déposer des fragments \texttt{.py} dans le répertoire \texttt{openstack\_\allowbreak dashboard/local/local\_\allowbreak settings.d/}
+(nom commençant par un tiret bas ; ils sont lus par ordre alphabétique après \texttt{local\_\allowbreak settings.py}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{5.6cm}>{\raggedright\arraybackslash}p{6.2cm}>{\raggedright\arraybackslash\ttfamily\small}p{3.7cm}@{}}
+\toprule
+\textrm{\textbf{Réglage}} & \textbf{Rôle} & \textrm{\textbf{Défaut}} \\
+\midrule
+OPENSTACK\_\allowbreak HOST & Hôte du serveur Keystone. & 127.0.0.1 \\
+OPENSTACK\_\allowbreak KEYSTONE\_\allowbreak URL & URL complète de l'API d'identité. & http://\%s/identity/v3 \\
+OPENSTACK\_\allowbreak KEYSTONE\_\allowbreak MULTIDOMAIN\_\allowbreak SUPPORT & Mode multi-domaines : la connexion demande un domaine. & False \\
+OPENSTACK\_\allowbreak KEYSTONE\_\allowbreak DEFAULT\_\allowbreak DOMAIN & Domaine utilisé en mode domaine unique. & Default \\
+OPENSTACK\_\allowbreak ENDPOINT\_\allowbreak TYPE & Type d'endpoint choisi dans le catalogue. & publicURL \\
+ALLOWED\_\allowbreak HOSTS & Noms d'hôte autorisés à servir le tableau de bord. & ['localhost'] \\
+SESSION\_\allowbreak TIMEOUT & Durée d'une session, en secondes. & 3600 \\
+SESSION\_\allowbreak REFRESH & Prolonge la session à chaque activité. & True \\
+DEFAULT\_\allowbreak THEME & Thème appliqué au premier accès. & default \\
+\bottomrule
+\end{tabular}
+\caption{Réglages courants de \texttt{local\_\allowbreak settings.py} \parencite{horizon-settings}.}
+\label{tab:ho-reglages}
+\end{table}
+
+\paragraph{Stocker les sessions.} Horizon s'appuie sur les sessions de Django ; le réglage \texttt{SESSION\_\allowbreak ENGINE} choisit où
+elles sont conservées (tableau~\ref{tab:ho-sessions}) \parencite{horizon-sessions}. Dès que plusieurs processus ou plusieurs
+serveurs servent le tableau de bord, la mémoire locale ne convient plus.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.2cm}>{\raggedright\arraybackslash}p{6.0cm}>{\raggedright\arraybackslash}p{6.3cm}@{}}
+\toprule
+\textbf{Stockage} & \textbf{Avantages} & \textbf{Limites} \\
+\midrule
+Mémoire locale & Aucune dépendance ; le plus simple. & Non partagée entre processus, perdue à l'arrêt : déconseillée en production. \\
+Memcached & Partagée entre processus et serveurs ; adaptée aux petits déploiements. & Demande un service memcached et un module Python. \\
+Base de données & Évolutive, persistante, peut être rendue hautement disponible. & Parmi les plus lentes ; forte charge si l'usage est intense. \\
+Base + cache & Écriture en base et lecture rapide par le cache. & Deux composants à exploiter. \\
+Cookies signés & Aucune infrastructure ; passe à l'échelle. & Données stockées chez l'utilisateur, transmises à chaque requête, taille limitée. \\
+\bottomrule
+\end{tabular}
+\caption{Où conserver les sessions \parencite{horizon-sessions}.}
+\label{tab:ho-sessions}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Personnaliser : panneaux, thèmes et identité visuelle}\label{sec:ho-perso}
+% ---------------------------------------------------------------------
+
+Les dashboards et panneaux se déclarent par des fichiers « \emph{enabled} » : de petits fichiers Python, rangés dans
+\texttt{openstack\_\allowbreak dashboard/enabled} (valeurs par défaut) et \texttt{openstack\_\allowbreak dashboard/local/enabled} (ajouts locaux). Ils sont lus par
+ordre alphabétique, et les fichiers locaux l'emportent ; le nom commence par un tiret bas et un nombre, qui fixe l'ordre
+\parencite{horizon-panels}. Les variables utiles sont résumées dans le tableau~\ref{tab:ho-enabled}. Exemple :
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{4.4cm}>{\raggedright\arraybackslash}p{11.1cm}@{}}
+\toprule
+\textrm{\textbf{Variable}} & \textbf{Effet} \\
+\midrule
+DASHBOARD & Nom du dashboard à ajouter (obligatoire pour un dashboard). \\
+PANEL & Nom du panneau à ajouter (obligatoire pour un panneau). \\
+PANEL\_\allowbreak DASHBOARD & Dashboard auquel le panneau appartient. \\
+PANEL\_\allowbreak GROUP & Groupe de panneaux auquel il appartient. \\
+ADD\_\allowbreak PANEL & Classe Python du panneau à ajouter. \\
+REMOVE\_\allowbreak PANEL & À \texttt{True}, retire le panneau de son dashboard. \\
+DISABLED & À \texttt{True}, le fichier n'est pas pris en compte ; avec \texttt{DASHBOARD}, cela désactive le dashboard. \\
+ADD\_\allowbreak INSTALLED\_\allowbreak APPS & Applications Django à ajouter à \texttt{INSTALLED\_APPS}. \\
+\bottomrule
+\end{tabular}
+\caption{Variables d'un fichier \emph{enabled} \parencite{horizon-panels}.}
+\label{tab:ho-enabled}
+\end{table}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# openstack_dashboard/local/enabled/_9000_admin_info_remove.py
+PANEL = 'info'
+PANEL_DASHBOARD = 'admin'
+PANEL_GROUP = 'admin'
+REMOVE_PANEL = True
+\end{lstlisting}
+\end{minipage}\par
+
+Ce fichier retire le panneau \emph{System Information} du dashboard \emph{Admin} sans toucher au code d'Horizon : son numéro
+élevé le fait lire après ceux qui déclarent le panneau. Pour renommer un panneau, retirer des colonnes d'un tableau ou
+remplacer une méthode, on déclare un module de personnalisation : la clé \texttt{customization\_\allowbreak module} de
+\texttt{HORIZON\_\allowbreak CONFIG} désigne alors un module Python à nous \parencite{horizon-customizing}.
+
+\paragraph{Thèmes et marque.} Un thème est un répertoire qui contient au moins un sous-répertoire \texttt{static} avec deux
+fichiers SCSS : \texttt{\_variables.scss} (couleurs et variables Bootstrap) et \texttt{\_styles.scss} (styles ajoutés après ceux
+du tableau de bord) ; on peut y joindre des gabarits (\texttt{templates/}) et des images (\texttt{img/logo.svg},
+\texttt{favicon.ico}\dots). Horizon fournit deux thèmes, \texttt{default} et \texttt{material}. Après une modification, on régénère les
+fichiers statiques avec \texttt{manage.py collectstatic} \parencite{horizon-themes}. Le titre et le lien du logo se règlent dans
+\texttt{local\_\allowbreak settings.py} \parencite{horizon-customizing}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+SITE_BRANDING = "Cloud pédagogique"
+SITE_BRANDING_LINK = "https://www.insa-cvl.fr"
+AVAILABLE_THEMES = [
+    ('default', 'Default', 'themes/default'),
+    ('insa', 'Thème INSA CVL', 'themes/insa'),
+]
+DEFAULT_THEME = 'insa'
+\end{lstlisting}
+\end{minipage}\par
+
+Dans \texttt{AVAILABLE\_\allowbreak THEMES}, chaque triplet donne la clé du thème (mémorisée dans un cookie), son libellé dans le menu
+de l'utilisateur et son chemin, relatif à \texttt{openstack\_\allowbreak dashboard} ou absolu \parencite{horizon-themes}.
+
+% ---------------------------------------------------------------------
+\subsection{Sécuriser et dépanner}\label{sec:ho-securite}
+% ---------------------------------------------------------------------
+
+Le tableau de bord est la porte d'entrée de la plateforme : il doit être servi en HTTPS. Le guide de sécurité d'OpenStack
+recommande les réglages du tableau~\ref{tab:ho-secu}. Un cookie \emph{secure} n'est envoyé que par une connexion chiffrée ;
+un cookie \emph{HttpOnly} est inaccessible aux scripts de la page \parencite{security-guide-dashboard}. Le fichier
+\texttt{local\_\allowbreak settings.py} contient des secrets : il appartient à \texttt{root}, au groupe \texttt{horizon}, avec les droits
+\texttt{640} ou plus stricts.
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{5.0cm}>{\raggedright\arraybackslash\ttfamily\small}p{3.6cm}>{\raggedright\arraybackslash}p{6.9cm}@{}}
+\toprule
+\textrm{\textbf{Réglage}} & \textrm{\textbf{Valeur}} & \textbf{Effet} \\
+\midrule
+CSRF\_\allowbreak COOKIE\_\allowbreak SECURE & True & Cookie CSRF envoyé seulement en HTTPS. \\
+SESSION\_\allowbreak COOKIE\_\allowbreak SECURE & True & Cookie de session envoyé seulement en HTTPS. \\
+SESSION\_\allowbreak COOKIE\_\allowbreak HTTPONLY & True & Cookie de session inaccessible aux scripts. \\
+DISALLOW\_\allowbreak IFRAME\_\allowbreak EMBED & True & Interdit d'afficher le tableau de bord dans une iframe. \\
+DISABLE\_\allowbreak PASSWORD\_\allowbreak REVEAL & True & Retire le bouton qui affiche le mot de passe saisi. \\
+PASSWORD\_\allowbreak AUTOCOMPLETE & off & Le navigateur ne mémorise pas le mot de passe. \\
+ENFORCE\_\allowbreak PASSWORD\_\allowbreak CHECK & True & Redemande le mot de passe de l'administrateur pour changer celui d'un utilisateur. \\
+PASSWORD\_\allowbreak VALIDATOR & autre que \textrm{.*} & Impose une règle de complexité (par défaut, tout est accepté). \\
+SECURE\_\allowbreak PROXY\_\allowbreak SSL\_\allowbreak HEADER & HTTP\_\allowbreak X\_\allowbreak FORWARDED\_\allowbreak PROTO, https & À définir derrière un proxy qui termine le HTTPS. \\
+\bottomrule
+\end{tabular}
+\caption{Réglages de sécurité recommandés \parencite{security-guide-dashboard, horizon-settings}.}
+\label{tab:ho-secu}
+\end{table}
+
+En cas de problème, on regarde d'abord les journaux d'Apache, puis ceux du service concerné. Le tableau~\ref{tab:ho-pannes}
+résume les pannes courantes.
+
+\begin{table}[H]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{5.8cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Erreur 400 (\emph{Bad Request}) à l'ouverture & Le nom utilisé dans l'URL n'est pas dans \texttt{ALLOWED\_\allowbreak HOSTS}. & Comparer l'URL et \texttt{ALLOWED\_\allowbreak HOSTS} \\
+Connexion refusée & Keystone injoignable, \texttt{OPENSTACK\_\allowbreak KEYSTONE\_\allowbreak URL} erronée, domaine manquant ou faux. & \texttt{openstack token issue} avec les mêmes identifiants \\
+Déconnexions aléatoires & Sessions en mémoire locale, non partagées entre processus ou serveurs. & \texttt{SESSION\_\allowbreak ENGINE} et \texttt{CACHES} \\
+Panneau absent & Service absent du catalogue, rôle insuffisant, ou panneau retiré par un fichier \emph{enabled}. & \texttt{openstack catalog list} ; dossier \texttt{local/enabled} \\
+« \emph{Unable to retrieve\dots} » dans un panneau & L'appel à l'API du service a échoué : service arrêté ou endpoint injoignable depuis Horizon. & \texttt{openstack endpoint list} ; journaux Apache et du service \\
+Thème ou logo inchangé & Fichiers statiques non régénérés, ou cache du navigateur. & \texttt{collectstatic} ; vider le cache \\
+Modification sans effet & Apache non rechargé. & \texttt{systemctl reload apache2} \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Horizon.}
+\label{tab:ho-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:ho-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Même action, deux chemins}\label{ex:ho-chemins}
+Un utilisateur crée un volume de 10~Go dans Horizon, puis refait la même opération en ligne de commande. (a)~Qu'ont ces
+deux actions en commun, et qu'est-ce qui change ? (b)~Où Horizon trouve-t-il l'adresse de Cinder ? (c)~Que se passe-t-il si
+l'utilisateur n'a pas le droit de créer un volume ?
+\end{exercice}
+\begin{correction}
+(a)~Les deux envoient la même requête REST à l'API de Cinder (\texttt{POST} sur \texttt{/v3/volumes}), avec le token de
+l'utilisateur. Seul le client change : Horizon appelle depuis le serveur web, la CLI depuis le poste de l'utilisateur.
+(b)~Dans le catalogue de services reçu de Keystone à la connexion et conservé en session ; l'endpoint retenu dépend de
+\texttt{OPENSTACK\_\allowbreak ENDPOINT\_\allowbreak TYPE} (\texttt{publicURL} par défaut). (c)~Cinder applique ses règles de \gls{policy} et refuse la
+requête ; Horizon affiche l'erreur, car il n'a pas de droits propres.
+\end{correction}
+
+\begin{exercice}{Déployer sur deux serveurs}\label{ex:ho-deploiement}
+Horizon tourne sur deux serveurs derrière un répartiteur de charge qui termine le HTTPS ; les utilisateurs sont
+déconnectés au hasard. (a)~Quelle est la cause probable ? (b)~Quels réglages modifier dans \texttt{local\_\allowbreak settings.py}, et quels
+réglages de sécurité ajouter ?
+\end{exercice}
+\begin{correction}
+(a)~Les sessions sont gardées en mémoire locale : une requête servie par l'autre serveur ne retrouve pas la session.
+(b)~Il faut un stockage partagé, par exemple un memcached commun, et les réglages de sécurité des cookies. Comme le
+répartiteur termine le HTTPS, \texttt{SECURE\_\allowbreak PROXY\_\allowbreak SSL\_\allowbreak HEADER} indique à Django comment reconnaître une requête sûre.
+\begin{lstlisting}
+SESSION_ENGINE = 'django.contrib.sessions.backends.cache'
+CACHES = {'default': {
+    'BACKEND': 'django.core.cache.backends.memcached.PyMemcacheCache',
+    'LOCATION': 'memcache.example.org:11211'}}
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+SESSION_COOKIE_HTTPONLY = True
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+ALLOWED_HOSTS = ['cloud.example.org']
+\end{lstlisting}
+\end{correction}
+
+\begin{exercice}{Retirer un panneau}\label{ex:ho-panneau}
+On veut retirer le panneau \texttt{info} du dashboard \texttt{admin}, sans modifier le code d'Horizon. Quel fichier créer, où,
+et que faire pour que le changement soit pris en compte ?
+\end{exercice}
+\begin{correction}
+Créer un fichier \emph{enabled} dans \texttt{openstack\_\allowbreak dashboard/local/enabled}, par exemple
+\texttt{\_9000\_\allowbreak admin\_\allowbreak info\_\allowbreak remove.py}, qui contient \texttt{PANEL = 'info'}, \texttt{PANEL\_\allowbreak DASHBOARD = 'admin'},
+\texttt{PANEL\_\allowbreak GROUP = 'admin'} et \texttt{REMOVE\_\allowbreak PANEL = True}. Le numéro élevé garantit qu'il est lu après les fichiers qui
+déclarent le panneau. Recharger Apache (\texttt{systemctl reload apache2.service}) pour que l'application relise sa configuration.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:ho-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Horizon est une application Django qui appelle les API REST des services avec le token de l'utilisateur ; elle n'a
+        pas de pouvoir propre et ne conserve pas l'état de la plateforme.
+  \item L'interface est organisée en dashboards (\emph{Project}, \emph{Admin}, \emph{Identity}, \emph{Settings}) qui contiennent
+        des panneaux ; ce que l'on voit dépend des services installés et des rôles.
+  \item Le projet comprend la bibliothèque \texttt{horizon}, le projet \texttt{openstack\_\allowbreak dashboard} et le module
+        d'authentification \texttt{openstack\_\allowbreak auth}.
+  \item À la connexion, Keystone délivre un token et le catalogue ; ils restent en session, et le navigateur ne reçoit qu'un
+        cookie.
+  \item La configuration tient dans \texttt{local\_\allowbreak settings.py} ; avec plusieurs serveurs, les sessions doivent être
+        partagées (memcached, base de données).
+  \item Panneaux et dashboards se modifient par des fichiers \emph{enabled} ; l'apparence, par des thèmes.
+  \item Servir le tableau de bord en HTTPS, avec des cookies \emph{secure} et \emph{HttpOnly}.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{9.9cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande ou réglage} & \textbf{§} \\
+\midrule
+Installer & \texttt{apt install openstack-dashboard} & \ref{sec:ho-install} \\
+Relier à Keystone & \texttt{OPENSTACK\_\allowbreak HOST}, \texttt{OPENSTACK\_\allowbreak KEYSTONE\_\allowbreak URL} & \ref{sec:ho-install} \\
+Partager les sessions & \texttt{SESSION\_\allowbreak ENGINE}, \texttt{CACHES} & \ref{sec:ho-install} \\
+Appliquer une modification & \texttt{systemctl reload apache2.service} & \ref{sec:ho-install} \\
+Retirer un panneau & Fichier \emph{enabled} avec \texttt{REMOVE\_\allowbreak PANEL = True} & \ref{sec:ho-perso} \\
+Changer l'apparence & \texttt{AVAILABLE\_\allowbreak THEMES}, \texttt{SITE\_\allowbreak BRANDING}, \texttt{manage.py collectstatic} & \ref{sec:ho-perso} \\
+Sécuriser les cookies & \texttt{SESSION\_\allowbreak COOKIE\_\allowbreak SECURE}, \texttt{CSRF\_\allowbreak COOKIE\_\allowbreak SECURE} & \ref{sec:ho-securite} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Expliquer ce qu'Horizon fait, et ne fait pas, par rapport à la CLI (exercice~\ref{ex:ho-chemins}).
+  \item Configurer des sessions partagées et sécuriser un déploiement à plusieurs serveurs (exercice~\ref{ex:ho-deploiement}).
+  \item Retirer un panneau par un fichier \emph{enabled} (exercice~\ref{ex:ho-panneau}).
+\end{itemize}
+\end{savoirfaire}
