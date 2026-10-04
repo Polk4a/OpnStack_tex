@@ -2,10 +2,566 @@
 %  Chapitre « Octavia : la répartition de charge »
 %  Fichier importé par main.tex avec \include{chap_octavia}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Introduction à OpenStack » (partie 12) et documentation
+%  officielle d'Octavia (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Octavia : la répartition de charge}\label{chap:octavia}
+% =====================================================================
+
+Octavia permet de présenter une application répartie sur plusieurs instances derrière une adresse unique. Ce chapitre
+présente son rôle, les objets qu'il manipule (répartiteur, listener, pool, members), son architecture, la création d'un
+répartiteur, la surveillance de la santé et la haute disponibilité, les fonctions avancées (TLS, persistance) et la mise
+en œuvre.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place d'Octavia}\label{sec:oc-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Octavia}
+Octavia est le service de répartition de charge d'OpenStack. C'est une solution libre, conçue pour fonctionner avec
+OpenStack à l'échelle d'un opérateur : elle distribue le trafic entrant vers un groupe de serveurs et cesse d'envoyer des
+requêtes à ceux qui ne répondent plus \parencite{octavia-intro}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Faire évoluer une application Web sur plusieurs instances tout en gardant un point d'accès
+        unique et une haute disponibilité (support de cours, partie 12).
+  \item \textbf{Communique avec.} Keystone (authentification), Nova (les instances qui font le travail de répartition),
+        Neutron (l'adresse du service et les réseaux), Glance (l'image de ces instances) et Barbican (les certificats
+        TLS) \parencite{octavia-intro}.
+  \item \textbf{Exemple.} créer un répartiteur sur un sous-réseau :
+\begin{lstlisting}[style=terminal]
+$ openstack loadbalancer create --name lb1 --vip-subnet-id public-subnet --wait
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,6.8) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (oc) at (6.4,3.9)
+    {Octavia\\ {\scriptsize\mdseries répartiteurs de charge}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,5.5) {Keystone};
+  \node[psvc, minimum width=2.6cm] (ba) at (0.9,2.3) {Barbican};
+  \node[psvc, minimum width=2.6cm] (no) at (11.9,5.7) {Nova};
+  \node[psvc, minimum width=2.6cm] (gl) at (11.9,3.9) {Glance};
+  \node[psvc, minimum width=2.6cm] (ne) at (11.9,2.1) {Neutron};
+  \node[pdat, minimum width=11.4cm] (am) at (6.4,0.3) {Amphores (VM HAProxy) $\to$ serveurs de l'application};
+  \draw[fluxr] (cli) -- (oc)
+    node[num, pos=0.3] {1} node[etiqf, midway, left=4mm] {requêtes REST};
+  \draw[fluxo] (oc.west) -- (ks.east)
+    node[num, pos=0.2, above=3pt] {2} node[etiqf, pos=0.62, above=2pt] {valide le token};
+  \draw[fluxo] (oc.west) -- (ba.east)
+    node[etiqf, pos=0.6, below=2pt] {certificats TLS};
+  \draw[fluxo] (oc.east) -- (no.west)
+    node[num, pos=0.2, above=3pt] {3} node[etiqf, pos=0.62, above=2pt] {crée les amphores};
+  \draw[fluxo] (oc.east) -- (gl.west)
+    node[etiqf, pos=0.62, above=2pt] {image de l'amphore};
+  \draw[fluxo] (oc.east) -- (ne.west)
+    node[etiqf, pos=0.62, below=2pt] {port VIP, réseaux};
+  \draw[fluxr] (oc.south) -- (am.north)
+    node[num, pos=0.45] {4} node[etiqf, midway, right=5mm] {configure les amphores};
+  \node[callout, minimum width=13.4cm] at (6.4,-0.9)
+    {Octavia ne répartit pas le trafic lui-même : il pilote les amphores qui le font.};
+\end{tikzpicture}}
+\caption{Octavia et ses voisins. Le client envoie une requête (1) après validation du token (2). Octavia fait créer les
+amphores par Nova, à partir d'une image de Glance, avec des ports de Neutron (3), puis les configure (4). Barbican
+conserve les certificats TLS.}
+\label{fig:oc-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : du répartiteur aux members}\label{sec:oc-concepts}
+% ---------------------------------------------------------------------
+
+Un répartiteur est décrit par quelques objets emboîtés (tableau~\ref{tab:oc-objets} et figure~\ref{fig:oc-flux}). Le trafic
+arrive sur une adresse de service, le \gls{vip} ; un \gls{listener} écoute un protocole et un port ; il transmet les requêtes
+à un \gls{poolocta}, dont les \glspl{memberocta} sont les serveurs réels, surveillés par un \gls{healthmonitor}
+\parencite{octavia-glossary}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{8.4cm}>{\raggedright\arraybackslash\ttfamily\small}p{4.1cm}@{}}
+\toprule
+\textbf{Objet} & \textbf{Rôle} & \textrm{\textbf{Exemple}} \\
+\midrule
+\Gls{loadbalancer} & Regroupe des listeners sur un VIP : c'est le point d'entrée. & lb1 \\
+\Gls{listener} & Point d'écoute : un protocole et un port. & HTTP, port 80 \\
+\Gls{poolocta} & Groupe de members vers lequel le listener transmet ; porte l'algorithme de répartition. & pool1 \\
+\Gls{memberocta} & Un serveur backend : une adresse et un port. & 192.0.2.10:80 \\
+\Gls{healthmonitor} & Vérifie périodiquement chaque member du pool. & HTTP /healthcheck \\
+\Gls{l7} & Aiguille des requêtes HTTP selon une condition (chemin, en-tête\dots). & /api vers pool-api \\
+\bottomrule
+\end{tabular}
+\caption{Les objets d'Octavia \parencite{octavia-glossary}.}
+\label{tab:oc-objets}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.0cm] (cl) at (0.9,2.4) {Clients};
+  \node[pdat, minimum width=2.4cm] (vip) at (3.9,2.4) {VIP\\ {\scriptsize\mdseries IP flottante}};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (5.5,0.2) rectangle (11.5,4.6);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (5.65,4.5) {Amphore (HAProxy)};
+  \node[psvc, minimum width=2.0cm] (ls) at (7.0,3.2) {Listener\\ {\scriptsize\mdseries HTTP : 80}};
+  \node[psvc, minimum width=2.0cm] (pl) at (10.0,3.2) {Pool\\ {\scriptsize\mdseries ROUND\_ROBIN}};
+  \node[pgris, minimum width=2.4cm] (hm) at (10.0,1.2) {Health\\ monitor};
+  \node[pdat, minimum width=2.4cm] (m1) at (13.8,3.9) {Member 1\\ {\scriptsize\mdseries 192.0.2.10:80}};
+  \node[pdat, minimum width=2.4cm] (m2) at (13.8,1.5) {Member 2\\ {\scriptsize\mdseries 192.0.2.11:80}};
+  \draw[fluxr] (cl) -- (vip) node[num, midway, above=3pt] {1};
+  \draw[fluxr] (vip.east) -- (ls.west) node[num, pos=0.25, above=3pt] {2};
+  \draw[fluxo] (ls) -- (pl) node[num, midway, above=3pt] {3};
+  \draw[fluxo] (pl.east) -- (m1.west) node[num, midway, above=3pt] {4};
+  \draw[fluxo] (pl.east) -- (m2.west);
+  \draw[<->, thick, insagris] (pl.south) -- (hm.north);
+  \draw[fluxd] (hm.east) -- (m2.south west);
+  \node[etiqf] at (12.0,0.6) {sonde les members};
+  \node[callout, minimum width=15.0cm] at (7.6,-0.9)
+    {Le client ne voit que le VIP ; les members peuvent être ajoutés ou retirés sans changer cette adresse.};
+\end{tikzpicture}}
+\caption{Trajet d'une requête. Le client s'adresse au VIP (1), que l'amphore reçoit sur un listener (2) ; le listener
+transmet à son pool (3), qui choisit un member selon l'algorithme (4). Le health monitor sonde les members.}
+\label{fig:oc-flux}
+\end{figure}
+
+L'\emph{algorithme} du pool décide quel member reçoit chaque nouvelle connexion (tableau~\ref{tab:oc-algos}). Les protocoles
+d'un listener sont HTTP, HTTPS, TCP, UDP, SCTP, \texttt{PROXY}, \texttt{PROXYV2} et \texttt{TERMINATED\_\allowbreak HTTPS}
+\parencite{octavia-api-ref}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.8cm}>{\raggedright\arraybackslash}p{11.7cm}@{}}
+\toprule
+\textrm{\textbf{Algorithme}} & \textbf{Principe} \\
+\midrule
+ROUND\_ROBIN & Les members reçoivent les connexions à tour de rôle. \\
+LEAST\_CONNECTIONS & Le member qui a le moins de connexions actives est choisi. \\
+SOURCE\_IP & Un même client est toujours dirigé vers le même member (hachage de l'adresse source). \\
+SOURCE\_IP\_PORT & Idem, avec un hachage de l'adresse et du port source. \\
+\bottomrule
+\end{tabular}
+\caption{Algorithmes de répartition d'un pool \parencite{octavia-api-ref}.}
+\label{tab:oc-algos}
+\end{table}
+
+\paragraph{Deux statuts.} Chaque objet porte un statut de provisionnement (la création a-t-elle réussi ?) et un statut
+opérationnel (fonctionne-t-il ?). Ils répondent à deux questions différentes (tableau~\ref{tab:oc-statuts}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{3.8cm}>{\raggedright\arraybackslash}p{11.7cm}@{}}
+\toprule
+\textrm{\textbf{Valeur}} & \textbf{Signification} \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Statut de provisionnement (\texttt{provisioning\_status})}} \\
+ACTIVE & L'objet a été créé avec succès. \\
+PENDING\_\allowbreak CREATE, PENDING\_\allowbreak UPDATE, PENDING\_\allowbreak DELETE & L'objet est en cours de création, de modification ou de suppression. \\
+ERROR & Le provisionnement a échoué. \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Statut opérationnel (\texttt{operating\_status})}} \\
+ONLINE & L'objet fonctionne normalement (tous les members sont sains). \\
+DEGRADED & Un ou plusieurs composants de l'objet sont en \texttt{ERROR}. \\
+ERROR & L'objet est en échec (par exemple, il échoue à ses tests de santé). \\
+OFFLINE & L'objet est désactivé par l'administrateur. \\
+DRAINING & Le member n'accepte plus de nouvelles connexions. \\
+NO\_\allowbreak MONITOR & Aucun health monitor : l'état est inconnu. \\
+\bottomrule
+\end{tabular}
+\caption{Statuts d'un objet Octavia \parencite{octavia-api-ref}.}
+\label{tab:oc-statuts}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Architecture interne}\label{sec:oc-archi}
+% ---------------------------------------------------------------------
+
+Octavia se compose d'un contrôleur, de machines virtuelles qui répartissent le trafic, les \glspl{amphore}, et d'un réseau
+qui les relie au contrôleur \parencite{octavia-intro}. L'implémentation de référence d'une amphore est une instance Nova
+qui exécute \gls{haproxy} \parencite{octavia-intro, octavia-components}. Le contrôleur est formé de plusieurs processus
+(tableau~\ref{tab:oc-composants}, figure~\ref{fig:oc-archi}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily\small}p{4.0cm}>{\raggedright\arraybackslash}p{11.5cm}@{}}
+\toprule
+\textrm{\textbf{Composant}} & \textbf{Rôle} \\
+\midrule
+octavia-api & Reçoit les requêtes REST (port 9876) et les transmet par la messagerie. \\
+octavia-worker & \emph{Controller worker} : exécute les actions (créer, modifier, supprimer, remplacer une amphore). \\
+octavia-health-manager & Surveille la santé des amphores et déclenche leur remplacement. \\
+octavia-housekeeping & Nettoie la base de données et gère la rotation des certificats. \\
+Driver agent & Reçoit les mises à jour d'état et de statistiques des drivers. \\
+Amphore & Instance Nova qui exécute HAProxy et répartit le trafic. \\
+\bottomrule
+\end{tabular}
+\caption{Composants d'Octavia \parencite{octavia-intro, octavia-install}.}
+\label{tab:oc-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.1,5.0) rectangle (14.9,9.3);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.25,9.2) {Contrôleur Octavia};
+  \node[pfoc, minimum width=3.2cm] (api) at (2.0,8.0) {octavia-api\\ {\scriptsize\mdseries port 9876}};
+  \node[psvc, minimum width=3.2cm] (wk) at (5.7,8.0) {octavia-worker\\ {\scriptsize\mdseries exécute les actions}};
+  \node[psvc, minimum width=3.2cm] (hm) at (9.4,8.0) {health-manager\\ {\scriptsize\mdseries surveille les amphores}};
+  \node[psvc, minimum width=3.2cm] (hk) at (13.1,8.0) {housekeeping\\ {\scriptsize\mdseries base, certificats}};
+  \node[pgris, minimum width=13.6cm, font=\scriptsize\bfseries] (bus) at (7.5,5.8) {File de messages (RabbitMQ) et base de données};
+  \foreach \x in {2.0,5.7,9.4,13.1} \draw[<->, thick, insagris] (\x,7.55) -- (\x,6.15);
+  \node[pgris, minimum width=13.6cm, font=\scriptsize\bfseries] (mgt) at (7.5,3.5) {Réseau de gestion des amphores};
+  \draw[fluxo] (5.7,5.0) -- (5.7,3.85) node[num, pos=0.5, right=3pt] {1} node[etiqf, pos=0.5, left=3pt, text width=2.2cm, align=right] {configuration (HTTPS)};
+  \draw[fluxd] (9.4,3.85) -- (9.4,5.0) node[num, pos=0.5, left=3pt] {2} node[etiqf, pos=0.5, right=3pt] {heartbeats (UDP)};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.1,0.3) rectangle (11.0,2.8);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.25,2.7) {Nœuds de calcul (Nova)};
+  \node[psvc, minimum width=3.6cm] (a1) at (2.9,1.3) {Amphore 1\\ {\scriptsize\mdseries HAProxy}};
+  \node[psvc, minimum width=3.6cm] (a2) at (8.0,1.3) {Amphore 2\\ {\scriptsize\mdseries HAProxy}};
+  \draw[<->, thick, insagris] (2.9,3.15) -- (a1.north);
+  \draw[<->, thick, insagris] (8.0,3.15) -- (a2.north);
+  \node[pgris, minimum width=3.4cm] (vn) at (13.0,1.3) {Réseaux du VIP\\ et des members};
+  \draw[fluxo] (a2.east) -- (vn.west) node[num, pos=0.5, above=3pt] {3};
+  \node[callout, minimum width=14.0cm] at (7.5,-0.9)
+    {Le contrôleur n'a pas besoin d'être sur le chemin des données : le trafic des clients passe par les amphores.};
+\end{tikzpicture}}
+\caption{Architecture d'Octavia. Le contrôleur reçoit les requêtes, les traite par la messagerie et configure chaque
+amphore par le réseau de gestion en HTTPS (1) ; les amphores envoient leurs heartbeats en UDP au health manager (2) et
+répartissent le trafic des réseaux du VIP et des members (3).}
+\label{fig:oc-archi}
+\end{figure}
+
+Le contrôleur dialogue avec une amphore par une API REST en HTTPS à authentification mutuelle ; l'amphore lui envoie des
+messages de santé courts et périodiques en UDP, signés par HMAC \parencite{octavia-components}. Les certificats se règlent
+dans \texttt{[haproxy\_\allowbreak amphora]} (\texttt{client\_\allowbreak cert}, \texttt{server\_\allowbreak ca}) et la clé des heartbeats dans
+\texttt{[health\_\allowbreak manager]} (\texttt{heartbeat\_\allowbreak key}) \parencite{octavia-config}.
+
+Le service s'appuie sur des \emph{drivers} : le driver \texttt{amphora}, pilote de référence, est le choix par défaut
+(\texttt{default\_\allowbreak provider\_\allowbreak driver}) ; d'autres pilotes (OVN, F5, A10, Radware, VMware NSX) remplacent l'amphore par
+une autre implémentation \parencite{octavia-providers, octavia-config}.
+
+% ---------------------------------------------------------------------
+\subsection{Créer un répartiteur de charge}\label{sec:oc-creation}
+% ---------------------------------------------------------------------
+
+La création est asynchrone : l'API répond aussitôt, avec un objet à l'état \texttt{PENDING\_\allowbreak CREATE}, puis le
+\emph{controller worker} fait créer l'amphore et la configure (figure~\ref{fig:oc-seq}). L'option \texttt{--wait} des
+commandes attend la fin de l'opération.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.4cm, fill=insarouge!8, draw=insarouge] (c) at (0.8,0) {Client\\ (CLI)};
+  \node[acteur, minimum width=2.4cm, fill=insarouge, text=white, draw=black] (a) at (4.5,0) {octavia-\\api};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (w) at (8.2,0) {octavia-\\worker};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (n) at (11.9,0) {Nova et\\ Neutron};
+  \node[acteur, minimum width=2.4cm, fill=insagris!12, draw=insagris] (m) at (15.6,0) {Amphore};
+  \foreach \x in {c,a,w,n,m} \draw[vie] (\x.south) -- ++(0,-10.6);
+  \seqmsg{0.8}{4.5}{-1.3}{1}{créer le\\ répartiteur}
+  \seqrep{4.5}{0.8}{-2.3}{}{\texttt{PENDING\_\allowbreak CREATE}}
+  \seqmsg{4.5}{8.2}{-3.4}{2}{ordre par la\\ file de messages}
+  \seqmsg{8.2}{11.9}{-4.6}{3}{créer l'amphore\\ et ses ports}
+  \seqrep{11.9}{8.2}{-5.6}{}{amphore démarrée}
+  \seqmsg{8.2}{15.6}{-6.8}{4}{configuration HAProxy\\ (HTTPS authentifié)}
+  \node[callout, font=\scriptsize, text width=3.2cm] at (8.2,-8.0) {met à jour l'état : \texttt{ACTIVE}};
+  \seqmsg{0.8}{4.5}{-9.2}{5}{consulter l'état\\ (\texttt{loadbalancer show})}
+  \seqrep{4.5}{0.8}{-10.2}{}{\texttt{ACTIVE}}
+\end{tikzpicture}}
+\caption{Création d'un répartiteur. L'API enregistre la demande (1) et la transmet au worker par la messagerie (2) ; celui-ci
+fait créer l'amphore et ses ports (3), puis la configure (4). Le client constate ensuite l'état \texttt{ACTIVE} (5).}
+\label{fig:oc-seq}
+\end{figure}
+
+Un répartiteur HTTP minimal se construit en cinq commandes, dans l'ordre des objets : répartiteur, listener, pool,
+members, health monitor \parencite{octavia-cookbook}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack loadbalancer create --name lb1 --vip-subnet-id public-subnet --wait
+$ openstack loadbalancer listener create --name listener1 --protocol HTTP \
+    --protocol-port 80 --wait lb1
+$ openstack loadbalancer pool create --name pool1 --lb-algorithm ROUND_ROBIN \
+    --listener listener1 --protocol HTTP --wait
+$ openstack loadbalancer member create --subnet-id private-subnet \
+    --address 192.0.2.10 --protocol-port 80 --wait pool1
+$ openstack loadbalancer member create --subnet-id private-subnet \
+    --address 192.0.2.11 --protocol-port 80 --wait pool1
+$ openstack loadbalancer healthmonitor create --delay 5 --max-retries 4 \
+    --timeout 10 --type HTTP --url-path /healthcheck --wait pool1
+\end{lstlisting}
+\end{minipage}\par
+
+Le VIP est une adresse du réseau choisi à la création (\texttt{--vip-subnet-id}). Pour joindre le service depuis
+l'extérieur, on associe une IP flottante au port du VIP \parencite{octavia-cookbook} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack floating ip create public
+$ openstack floating ip set --port <load_balancer_vip_port_id> <floating_ip_id>
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Santé et haute disponibilité}\label{sec:oc-sante}
+% ---------------------------------------------------------------------
+
+Deux surveillances se superposent (figure~\ref{fig:oc-sante}). La première concerne les \emph{members} : le health monitor
+les sonde toutes les \texttt{--delay} secondes ; si un member échoue, il est retiré du pool et passe en \texttt{ERROR}, puis
+il revient en \texttt{ONLINE} dès qu'il répond de nouveau \parencite{octavia-cookbook}. Les types de sonde sont \texttt{HTTP},
+\texttt{HTTPS}, \texttt{PING}, \texttt{TCP}, \texttt{TLS-HELLO}, \texttt{UDP-CONNECT} et \texttt{SCTP}
+\parencite{octavia-api-ref}. La seconde concerne les \emph{amphores} : chacune envoie des heartbeats au health manager ;
+si l'un d'eux manque au-delà de \texttt{heartbeat\_\allowbreak timeout} (60~s par défaut), l'amphore est remplacée
+\parencite{octavia-config}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pdat, minimum width=2.4cm] (m1) at (1.2,4.2) {Member 1};
+  \node[pdat, minimum width=2.4cm] (m2) at (1.2,1.2) {Member 2};
+  \node[psvc, minimum width=2.8cm, minimum height=1.2cm] (am) at (5.2,2.7) {Amphore};
+  \node[pfoc, minimum width=2.8cm] (hm) at (10.6,2.7) {Health manager};
+  \node[psvc, minimum width=2.8cm] (wk) at (10.6,0.6) {octavia-worker};
+  \node[psvc, minimum width=2.0cm] (nv) at (15.0,0.6) {Nova};
+  \draw[fluxd] (am.west) -- (m1.east) node[etiqf, pos=0.55, above=2pt] {sonde};
+  \draw[fluxd] (am.west) -- (m2.east);
+  \draw[fluxo] (am.east) -- (hm.west);
+  \node[num] at (6.9,3.0) {1};
+  \node[etiqf] at (8.0,2.4) {heartbeats (UDP)};
+  \draw[fluxr] (hm.south) -- (wk.north);
+  \node[num] at (10.1,1.65) {2};
+  \node[etiqf, anchor=west] at (10.8,1.65) {silence trop long};
+  \draw[fluxo] (wk.east) -- (nv.west);
+  \node[num] at (12.9,0.9) {3};
+  \node[etiqf, text width=1.6cm] at (12.9,0.2) {nouvelle amphore};
+  \node[etiqf, text width=2.6cm] at (1.2,2.7) {member en échec : retiré du pool};
+  \node[callout, minimum width=15.0cm] at (8.0,-0.9)
+    {Un member défaillant est écarté ; une amphore défaillante est remplacée.};
+\end{tikzpicture}}
+\caption{Deux niveaux de surveillance. L'amphore sonde les members et envoie ses heartbeats au health manager (1) ; en
+cas de silence prolongé, celui-ci déclenche le remplacement (2) et le worker recrée une amphore (3).}
+\label{fig:oc-sante}
+\end{figure}
+
+La \emph{topologie} fixe le nombre d'amphores par répartiteur : \texttt{SINGLE} (une, valeur par défaut) ou
+\texttt{ACTIVE\_\allowbreak STANDBY} (deux, dont une de secours) \parencite{octavia-config}. L'administrateur la propose aux
+utilisateurs par des \emph{flavors} de répartiteur \parencite{octavia-flavors}, et peut forcer le remplacement d'une amphore :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack loadbalancer flavorprofile create --name amphora-single-profile \
+    --provider amphora --flavor-data '{"loadbalancer_topology": "SINGLE"}'
+$ openstack loadbalancer flavor create --name standalone-lb \
+    --flavorprofile amphora-single-profile --enable
+$ openstack loadbalancer failover lb1
+\end{lstlisting}
+\end{minipage}\par
+
+Après un \texttt{failover}, on suit l'opération avec \texttt{openstack loadbalancer show} jusqu'au retour à l'état
+\texttt{ACTIVE} \parencite{octavia-maintenance}.
+
+% ---------------------------------------------------------------------
+\subsection{Fonctions avancées}\label{sec:oc-avance}
+% ---------------------------------------------------------------------
+
+Le tableau~\ref{tab:oc-besoins} relie quelques besoins courants à l'option d'Octavia qui y répond \parencite{octavia-cookbook}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{4.9cm}>{\raggedright\arraybackslash\ttfamily\small}p{6.2cm}@{}}
+\toprule
+\textbf{Besoin} & \textbf{Mécanisme} & \textrm{\textbf{Option ou objet}} \\
+\midrule
+Garder un client sur le même member & Persistance de session & --session-persistence type=APP\_\allowbreak COOKIE, cookie\_\allowbreak name=PHPSESSIONID \\
+Chiffrer côté client, TLS terminé par le répartiteur & Listener \texttt{TERMINATED\_\allowbreak HTTPS}, certificat dans Barbican & --default-tls-container \\
+Laisser le chiffrement aux serveurs & HTTPS sans terminaison (listener et pool \texttt{HTTPS}) & --protocol HTTPS \\
+Chiffrer aussi vers les members & Rechiffrement côté pool & --enable-tls \\
+Restreindre qui peut se connecter & Liste d'adresses autorisées & --allowed-cidr \\
+Limiter le débit du service & Politique QoS de Neutron sur le VIP & --vip-qos-policy-id \\
+Répartir du TCP ou de l'UDP & Listener et pool de ce protocole & --protocol UDP, --type UDP-CONNECT \\
+Aiguiller selon l'URL & Politiques et règles L7 & \textrm{\emph{l7policy}, \emph{l7rule}} \\
+\bottomrule
+\end{tabular}
+\caption{Besoins courants et options d'Octavia \parencite{octavia-cookbook}.}
+\label{tab:oc-besoins}
+\end{table}
+
+Pour terminer le TLS sur le répartiteur, on stocke d'abord le certificat et sa clé dans Barbican, au format PKCS\,\#12,
+puis on crée un listener qui y fait référence \parencite{octavia-cookbook} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openssl pkcs12 -export -inkey server.key -in server.crt \
+    -certfile ca-chain.crt -passout pass: -out server.p12
+$ openstack secret store --name='tls_secret1' -t 'application/octet-stream' \
+    -e 'base64' --payload="$(base64 < server.p12)"
+$ openstack loadbalancer listener create --protocol-port 443 \
+    --protocol TERMINATED_HTTPS --name listener-https --default-pool pool1 \
+    --default-tls-container=$(openstack secret list | awk '/ tls_secret1 / {print $2}') \
+    --wait lb1
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre et dépannage}\label{sec:oc-deploiement}
+% ---------------------------------------------------------------------
+
+Sur le contrôleur, l'installation crée une base \texttt{octavia}, l'utilisateur \texttt{octavia} dans Keystone, le service de
+type \texttt{load-balancer} avec ses trois endpoints sur \texttt{http://controller:9876}, puis installe les paquets
+\texttt{octavia-api}, \texttt{octavia-health-manager}, \texttt{octavia-housekeeping} et \texttt{octavia-worker}. Il faut aussi
+préparer, côté OpenStack, ce dont les amphores ont besoin : une image, un flavor (par exemple 1~vCPU, 1\,024~Mo de RAM, 2~Go de
+disque), un réseau de gestion, des certificats \parencite{octavia-install}. L'image se construit avec
+\texttt{diskimage-create.sh} (base Ubuntu ou CentOS Stream avec HAProxy) \parencite{octavia-amphora-image} ; on la dépose dans
+Glance avec une étiquette que \texttt{amp\_\allowbreak image\_\allowbreak tag} reprend \parencite{octavia-maintenance}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/octavia/octavia.conf (extrait)
+[database]
+connection = mysql+pymysql://octavia:OCTAVIA_DBPASS@controller/octavia
+[DEFAULT]
+transport_url = rabbit://openstack:RABBIT_PASS@controller
+[api_settings]
+bind_host = 0.0.0.0
+bind_port = 9876
+[health_manager]
+bind_ip = 172.16.0.2
+bind_port = 5555
+controller_ip_port_list = 172.16.0.2:5555
+[controller_worker]
+amp_image_tag = amphora
+amp_flavor_id = 200
+amp_boot_network_list = LB_MGMT_NET_ID
+amp_secgroup_list = LB_SECGROUP_ID
+loadbalancer_topology = SINGLE
+\end{lstlisting}
+\end{minipage}\par
+
+On applique ensuite le schéma de la base avec \texttt{octavia-db-manage upgrade head}, puis on redémarre les services
+\parencite{octavia-install}. Le tableau~\ref{tab:oc-pannes} résume les pannes courantes.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{5.8cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Répartiteur en \texttt{ERROR} dès la création & L'amphore ne démarre pas : image introuvable (étiquette), flavor, réseau de gestion ou groupe de sécurité erroné. & \texttt{amp\_\allowbreak image\_\allowbreak tag}, \texttt{amp\_\allowbreak flavor\_\allowbreak id} ; journaux de \texttt{octavia-worker} \\
+Bloqué en \texttt{PENDING\_\allowbreak CREATE} & Le worker n'atteint pas l'amphore (réseau de gestion, certificats). & Réseau de gestion ; journaux du worker \\
+Member en \texttt{ERROR} & Le health monitor échoue : chemin de test faux, port fermé, groupe de sécurité du member. & \texttt{openstack loadbalancer member list pool1} \\
+Répartiteur \texttt{DEGRADED} & Au moins un composant (un member) est en \texttt{ERROR}. & \texttt{openstack loadbalancer status show lb1} \\
+Amphores remplacées sans cesse & Heartbeats perdus : réseau de gestion, \texttt{heartbeat\_\allowbreak key}, \texttt{controller\_\allowbreak ip\_\allowbreak port\_\allowbreak list}. & Journaux du health manager \\
+VIP injoignable & IP flottante non associée au port du VIP, ou liste \texttt{--allowed-cidr} trop stricte. & \texttt{openstack floating ip show} \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Octavia.}
+\label{tab:oc-pannes}
+\end{table}
+
+\clearpage
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:oc-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Un site sur deux instances}\label{ex:oc-site}
+Deux instances \texttt{10.0.0.11} et \texttt{10.0.0.12} (sous-réseau \texttt{private-subnet}) servent un site HTTP sur le
+port 80 ; le VIP doit être pris sur \texttt{public-subnet}. Écrire les commandes qui créent le répartiteur \texttt{web-lb},
+répartissent à tour de rôle et surveillent la page \texttt{/health}. Comment le rendre joignable depuis Internet ?
+\end{exercice}
+\begin{correction}
+\begin{lstlisting}[style=terminal]
+$ openstack loadbalancer create --name web-lb \
+    --vip-subnet-id public-subnet --wait
+$ openstack loadbalancer listener create --name web-http --protocol HTTP \
+    --protocol-port 80 --wait web-lb
+$ openstack loadbalancer pool create --name web-pool \
+    --lb-algorithm ROUND_ROBIN --listener web-http --protocol HTTP --wait
+$ openstack loadbalancer member create --subnet-id private-subnet \
+    --address 10.0.0.11 --protocol-port 80 --wait web-pool
+$ openstack loadbalancer member create --subnet-id private-subnet \
+    --address 10.0.0.12 --protocol-port 80 --wait web-pool
+$ openstack loadbalancer healthmonitor create --delay 5 --max-retries 4 \
+    --timeout 10 --type HTTP --url-path /health --wait web-pool
+\end{lstlisting}
+Pour l'ouvrir à Internet : créer une IP flottante et l'associer au port du VIP (\texttt{openstack floating ip set --port}).
+\end{correction}
+
+\begin{exercice}{Lire les statuts}\label{ex:oc-statuts}
+Un répartiteur affiche \texttt{provisioning\_status = ACTIVE} et \texttt{operating\_status = DEGRADED}. Que signifient ces
+deux valeurs, et que vérifier ?
+\end{exercice}
+\begin{correction}
+\texttt{ACTIVE} : le répartiteur a été créé correctement. \texttt{DEGRADED} : au moins un de ses composants est en erreur ;
+ici, très probablement, un member qui échoue au health monitor. On le repère avec
+\texttt{openstack loadbalancer status show} ou \texttt{member list}, puis on vérifie que le serveur répond sur son port, que
+le chemin de test existe et que son groupe de sécurité accepte le trafic venant de l'amphore.
+\end{correction}
+
+\begin{exercice}{Panne d'une amphore}\label{ex:oc-panne}
+La machine hôte d'une amphore tombe en panne. Que se passe-t-il, au bout de combien de temps, et comment forcer l'opération ?
+\end{exercice}
+\begin{correction}
+Les heartbeats cessent d'arriver au health manager. Passé \texttt{heartbeat\_\allowbreak timeout} (60~s par défaut), il déclenche le
+remplacement : le worker recrée une amphore avec la configuration du répartiteur. Le service est interrompu pendant cette
+durée avec la topologie \texttt{SINGLE} ; \texttt{ACTIVE\_\allowbreak STANDBY} garde une amphore de secours. On peut forcer
+l'opération avec \texttt{openstack loadbalancer failover lb1}, puis attendre le retour à \texttt{ACTIVE}.
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:oc-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Octavia répartit le trafic d'un VIP vers les members d'un pool, par des amphores : des instances Nova qui
+        exécutent HAProxy.
+  \item Les objets s'emboîtent : répartiteur, listener, pool, members, health monitor ; les politiques L7 aiguillent selon
+        l'URL.
+  \item Le contrôleur (API, worker, health manager, housekeeping) pilote les amphores par un réseau de gestion en HTTPS ;
+        elles envoient des heartbeats en UDP.
+  \item La création est asynchrone : \texttt{PENDING\_\allowbreak CREATE} puis \texttt{ACTIVE} ; le statut opérationnel indique
+        la santé (\texttt{ONLINE}, \texttt{DEGRADED}, \texttt{ERROR}\dots).
+  \item Un member défaillant est écarté par le health monitor ; une amphore défaillante est remplacée (\emph{failover}).
+  \item Le TLS peut être terminé sur le répartiteur (certificat dans Barbican) ou laissé aux serveurs.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{9.9cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer un répartiteur & \texttt{openstack loadbalancer create --vip-subnet-id S}, puis \texttt{listener}, \texttt{pool}, \texttt{member}, \texttt{healthmonitor create} & \ref{sec:oc-creation} \\
+Joindre le VIP & \texttt{openstack floating ip set --port P F} & \ref{sec:oc-creation} \\
+Remplacer une amphore & \texttt{openstack loadbalancer failover LB} & \ref{sec:oc-sante} \\
+Terminer le TLS & \texttt{openstack secret store}, listener \texttt{TERMINATED\_\allowbreak HTTPS} & \ref{sec:oc-avance} \\
+Lire l'état & \texttt{openstack loadbalancer show LB}, \texttt{status show LB} & \ref{sec:oc-concepts} \\
+Appliquer le schéma de base & \texttt{octavia-db-manage upgrade head} & \ref{sec:oc-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Construire un répartiteur HTTP avec health monitor et IP flottante (exercice~\ref{ex:oc-site}).
+  \item Interpréter les statuts de provisionnement et d'exploitation (exercice~\ref{ex:oc-statuts}).
+  \item Expliquer et provoquer le remplacement d'une amphore (exercice~\ref{ex:oc-panne}).
+\end{itemize}
+\end{savoirfaire}

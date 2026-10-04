@@ -263,3 +263,56 @@
 
 \newglossaryentry{memcached}{name={memcached}, sort={memcached},
   description={Service de cache en mémoire, partagé entre processus et serveurs ; Horizon l'utilise couramment pour conserver les sessions}}
+
+% ---- Octavia ----------------------------------------------------------
+\newglossaryentry{loadbalancer}{name={répartiteur de charge (load balancer)}, sort={repartiteur de charge}, text={répartiteur de charge}, plural={répartiteurs de charge},
+  description={Service qui reçoit le trafic sur une adresse unique (la VIP) et le distribue entre plusieurs serveurs ; c'est l'objet principal que l'utilisateur crée dans Octavia}}
+
+\newglossaryentry{listener}{name={listener}, sort={listener}, plural={listeners},
+  description={Point d'écoute d'un répartiteur : un protocole et un port (par exemple HTTP, 80) sur la VIP ; il envoie le trafic reçu vers un pool}}
+
+\newglossaryentry{poolocta}{name={pool (Octavia)}, sort={pool}, text={pool}, plural={pools},
+  description={Groupe de serveurs qui reçoivent le trafic d'un listener, avec un algorithme de répartition et, au besoin, un health monitor}}
+
+\newglossaryentry{memberocta}{name={member (Octavia)}, sort={member}, text={member}, plural={members},
+  description={Serveur d'un pool, repéré par une adresse IP et un port ; il peut être une instance Nova ou n'importe quelle adresse joignable}}
+
+\newglossaryentry{healthmonitor}{name={health monitor}, sort={health monitor},
+  description={Sonde que le répartiteur envoie à chaque member (TCP, HTTP, HTTPS, PING\dots) ; un member qui échoue est retiré de la distribution jusqu'à ce qu'il réponde de nouveau}}
+
+\newglossaryentry{amphore}{name={amphore}, sort={amphore}, plural={amphores},
+  description={Instance Nova, créée par Octavia, qui exécute HAProxy et porte la VIP ; c'est elle qui écoute et répartit réellement le trafic}}
+
+\newglossaryentry{vip}{name={VIP (adresse virtuelle)}, sort={VIP}, text={VIP},
+  description={Adresse IP du répartiteur de charge, celle que les clients utilisent ; elle est portée par un port Neutron et peut recevoir une adresse flottante}}
+
+\newglossaryentry{l7}{name={politique L7 (L7 policy)}, sort={politique L7}, text={politique L7}, plural={politiques L7},
+  description={Règle de routage au niveau applicatif (chemin d'URL, en-tête, nom d'hôte\dots) qui redirige une requête vers un autre pool ou vers une URL}}
+
+\newglossaryentry{haproxy}{name={HAProxy}, sort={HAProxy},
+  description={Logiciel libre de répartition de charge TCP et HTTP ; l'amphore de référence d'Octavia l'exécute}}
+
+% ---- Swift ------------------------------------------------------------
+\newglossaryentry{objetswift}{name={objet (Swift)}, sort={objet}, text={objet}, plural={objets},
+  description={Donnée stockée dans Swift : le contenu d'un fichier et ses métadonnées, adressé par son chemin \texttt{/compte/conteneur/objet}}}
+
+\newglossaryentry{conteneur}{name={conteneur (Swift)}, sort={conteneur}, text={conteneur}, plural={conteneurs},
+  description={Espace de noms d'un compte Swift qui regroupe des objets ; il porte les droits d'accès, la politique de stockage et d'autres métadonnées}}
+
+\newglossaryentry{proxyswift}{name={proxy (Swift)}, sort={proxy}, text={proxy}, plural={proxys},
+  description={Service \texttt{swift-proxy-server} : seul point d'entrée de l'API, il authentifie, consulte le ring et relaie les requêtes vers les serveurs de stockage}}
+
+\newglossaryentry{ring}{name={ring}, sort={ring}, plural={rings},
+  description={Fichier qui associe chaque partition à des disques précis ; Swift en tient un pour les comptes, un pour les conteneurs et un par politique de stockage d'objets}}
+
+\newglossaryentry{partition}{name={partition (Swift)}, sort={partition}, text={partition}, plural={partitions},
+  description={Unité de répartition du ring : un intervalle des empreintes MD5 des chemins ; le ring place ses répliques sur des disques de zones différentes}}
+
+\newglossaryentry{handoff}{name={handoff}, sort={handoff}, plural={handoffs},
+  description={Disque de remplacement choisi par le ring lorsqu'un disque normal est en panne ; la réplication ramène ensuite les données à leur place}}
+
+\newglossaryentry{erasurecoding}{name={codage d'effacement (erasure coding)}, sort={codage d'effacement}, text={codage d'effacement},
+  description={Méthode de redondance qui découpe un objet en fragments de données et de parité ; Swift l'offre par une politique de stockage, pour un surcoût moindre que la triple réplication}}
+
+\newglossaryentry{politiquestockage}{name={politique de stockage (storage policy)}, sort={politique de stockage}, text={politique de stockage}, plural={politiques de stockage},
+  description={Choix, par conteneur, d'un ring d'objets et donc du nombre de répliques, du type de disques ou du codage d'effacement}}

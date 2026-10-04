@@ -2,10 +2,508 @@
 %  Chapitre « Swift : le stockage objet »
 %  Fichier importé par main.tex avec \include{chap_swift}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Chapitre 3 » (partie 2, Swift) et documentation
+%  officielle de Swift (voir sources.bib).
+%  Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Swift : le stockage objet}\label{chap:swift}
+% =====================================================================
+
+Swift stocke de très grandes quantités de fichiers sur des serveurs ordinaires, sans point central. Ce chapitre présente son
+rôle, son modèle de données (compte, conteneur, objet), son architecture, le ring qui place les données, l'écriture d'un
+objet et la réplication, les politiques de stockage, les fonctions utiles et la mise en œuvre.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Swift}\label{sec:sw-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Swift}
+Swift est le service de stockage objet d'OpenStack : il conserve de façon redondante et extensible de grandes quantités de
+données sur des grappes de serveurs standard, sans point de contrôle central \parencite{swift-intro}. On y accède par une
+API REST, non en montant un disque.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Stocker de façon fiable et économique des millions de fichiers (images, sauvegardes, journaux,
+        médias) sans jamais saturer un seul serveur (support de cours, chapitre~3).
+  \item \textbf{Communique avec.} Keystone (authentification), Glance (qui peut y ranger les images), Cinder (qui peut y
+        envoyer ses sauvegardes) et directement les applications par l'API REST.
+  \item \textbf{Exemple.} créer un conteneur et y déposer un fichier :
+\begin{lstlisting}[style=terminal]
+$ openstack container create photos
+$ openstack object create photos vacances.jpg
+\end{lstlisting}
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,6.6) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ applications};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (sw) at (6.4,3.7)
+    {Swift\\ {\scriptsize\mdseries objets}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,3.7) {Keystone};
+  \node[psvc, minimum width=2.6cm] (gl) at (11.9,5.4) {Glance};
+  \node[psvc, minimum width=2.6cm] (ci) at (11.9,2.0) {Cinder};
+  \node[pgris, minimum width=11.4cm] (st) at (6.4,0.3) {Nœuds de stockage : disques durs (XFS)};
+  \draw[fluxr] (cli) -- (sw)
+    node[num, pos=0.3] {1} node[etiqf, midway, left=4mm] {API REST (HTTP)};
+  \draw[fluxo] (sw.west) -- (ks.east)
+    node[num, pos=0.2, above=3pt] {2} node[etiqf, midway, below=2pt] {valide le token};
+  \draw[fluxo] (gl.west) -- (sw.north east)
+    node[etiqf, pos=0.55, above=2pt] {images};
+  \draw[fluxo] (ci.west) -- (sw.south east)
+    node[etiqf, pos=0.55, below=2pt] {sauvegardes};
+  \draw[fluxr] (sw.south) -- (st.north)
+    node[num, pos=0.45] {3} node[etiqf, midway, right=5mm] {plusieurs répliques};
+  \node[callout, minimum width=13.4cm] at (6.4,-0.9)
+    {Swift ne monte aucun disque : on lit et on écrit des objets par HTTP.};
+\end{tikzpicture}}
+\caption{Swift et ses voisins. Le client appelle l'API REST (1) après validation du token (2) ; Swift écrit chaque objet en
+plusieurs répliques sur ses nœuds de stockage (3). Glance et Cinder peuvent s'en servir comme dépôt.}
+\label{fig:sw-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts : comptes, conteneurs, objets}\label{sec:sw-concepts}
+% ---------------------------------------------------------------------
+
+Swift organise les données sur trois niveaux : un \emph{compte} (qui correspond à un projet) contient des \glspl{conteneur},
+qui contiennent des \glspl{objetswift} \parencite{swift-api-ref}. Un objet est identifié par son chemin
+\texttt{/v1/AUTH\_<projet>/<conteneur>/<objet>} : \texttt{AUTH\_} suivi de l'identifiant du projet est le nom du compte
+\parencite{swift-install-controller}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=3.4cm, minimum height=1.3cm] (a) at (1.0,3.2) {Compte\\ {\scriptsize\mdseries \texttt{AUTH\_<projet>}}};
+  \node[psvc, minimum width=2.8cm] (c1) at (6.0,4.8) {Conteneur\\ {\scriptsize\mdseries \texttt{photos}}};
+  \node[psvc, minimum width=2.8cm] (c2) at (6.0,1.6) {Conteneur\\ {\scriptsize\mdseries \texttt{sauvegardes}}};
+  \node[pdat, minimum width=3.6cm] (o1) at (11.6,5.8) {vacances.jpg};
+  \node[pdat, minimum width=3.6cm] (o2) at (11.6,4.0) {ete/plage.png};
+  \node[pdat, minimum width=3.6cm] (o3) at (11.6,1.6) {base-2026-10.tar};
+  \draw[fluxr] (a.east) -- (c1.west);
+  \draw[fluxr] (a.east) -- (c2.west);
+  \draw[fluxo] (c1.east) -- (o1.west);
+  \draw[fluxo] (c1.east) -- (o2.west);
+  \draw[fluxo] (c2.east) -- (o3.west);
+  \node[etiqf] at (1.0,5.2) {compte (projet)};
+  \node[etiqf] at (6.0,6.5) {conteneurs};
+  \node[etiqf] at (11.6,6.8) {objets : données + métadonnées};
+  \node[callout, minimum width=14.2cm] at (6.6,-0.1)
+    {URL d'un objet : \texttt{/v1/AUTH\_<projet>/photos/vacances.jpg}};
+\end{tikzpicture}}
+\caption{Les trois niveaux de Swift. Un compte contient des conteneurs, qui contiennent des objets. Il n'y a pas de
+répertoires : le nom d'un objet peut contenir des \texttt{/}.}
+\label{fig:sw-hier}
+\end{figure}
+
+Un objet est un fichier accompagné de métadonnées, que l'on pose avec des en-têtes \texttt{X-Object-Meta-}\emph{nom} ; les
+conteneurs et les comptes ont les leurs \parencite{swift-api-ref}. Les noms n'ont pas de hiérarchie réelle : un délimiteur
+permet de lister « par dossier » (\texttt{openstack object list --delimiter}) \parencite{osc-object}. Le stockage objet se
+distingue du stockage bloc de Cinder (tableau~\ref{tab:sw-bloc}).
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{2.8cm}>{\raggedright\arraybackslash}p{6.0cm}>{\raggedright\arraybackslash}p{6.7cm}@{}}
+\toprule
+ & \textbf{Swift (objet)} & \textbf{Cinder (bloc)} \\
+\midrule
+Accès & API REST en HTTP ; rien n'est monté. & Vu comme un disque par le système de l'instance. \\
+Unité & Un objet entier, avec ses métadonnées. & Des blocs d'un volume. \\
+Modification & On remplace l'objet en entier. & On écrit n'importe où sur le disque. \\
+Organisation & Compte, conteneur, objet. & Volume, rattaché à une instance. \\
+Usage typique & Sauvegardes, médias, journaux, archives. & Système de fichiers, base de données. \\
+\bottomrule
+\end{tabular}
+\caption{Stockage objet et stockage bloc (support de cours, chapitre~3 ; voir le chapitre~\ref{chap:cinder}).}
+\label{tab:sw-bloc}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Architecture}\label{sec:sw-archi}
+% ---------------------------------------------------------------------
+
+Swift sépare l'API publique, tenue par des \emph{proxys}, du stockage, assuré par trois types de serveurs (tableau~\ref{tab:sw-composants}
+et figure~\ref{fig:sw-archi}). Aucun n'est un point unique de défaillance : les proxys n'ont pas d'état et se multiplient, et
+chaque objet existe en plusieurs répliques \parencite{swift-architecture}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}p{10.0cm}>{\raggedright\arraybackslash}p{1.9cm}@{}}
+\toprule
+\textbf{Composant} & \textbf{Rôle} & \textbf{Port} \\
+\midrule
+\Gls{proxyswift} & Expose l'API, consulte le ring, route chaque requête ; les objets le traversent en flux, sans y être stockés. & 8080 \\
+Serveur de comptes & Tient la liste des conteneurs d'un compte, dans une base SQLite. & 6202 \\
+Serveur de conteneurs & Tient la liste des objets d'un conteneur, dans une base SQLite. & 6201 \\
+Serveur d'objets & Stocke les objets comme des fichiers ; leurs métadonnées sont des attributs étendus. & 6200 \\
+Réplicateurs & Comparent les copies et recopient ce qui manque (\emph{replicator}) ; le \emph{reconstructor} fait de même pour le codage d'effacement. & \\
+Updaters, auditors & Les updaters rejouent les mises à jour de listes qui ont échoué ; les auditors vérifient l'intégrité et mettent en quarantaine les fichiers corrompus. & \\
+\bottomrule
+\end{tabular}
+\caption{Composants de Swift et ports par défaut de l'installation \parencite{swift-architecture, swift-install-controller, swift-install-storage}.}
+\label{tab:sw-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=4.4cm] (cl) at (7.5,9.6) {Clients (API REST)};
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.3,6.4) rectangle (14.7,8.6);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.45,8.5) {Nœuds proxy};
+  \node[pfoc, minimum width=3.6cm] (p1) at (3.8,7.3) {swift-proxy\\ {\scriptsize\mdseries port 8080}};
+  \node[pfoc, minimum width=3.6cm] (p2) at (11.2,7.3) {swift-proxy\\ {\scriptsize\mdseries port 8080}};
+  \node[pdat, minimum width=2.6cm] (ring) at (7.5,7.3) {Ring\\ {\scriptsize\mdseries \texttt{.ring.gz}}};
+  \draw[fluxd] (p1.east) -- (ring.west) node[num, pos=0.5, above=3pt] {2};
+  \draw[fluxd] (p2.west) -- (ring.east);
+  \draw[fluxr] (cl.south) -- (7.5,8.6) node[num, pos=0.5, right=4pt] {1};
+  \foreach \i/\x in {1/2.55, 2/7.65, 3/12.75} {
+    \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] ({\x-2.25},0.3) rectangle ({\x+2.25},4.3);
+    \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at ({\x-2.1},4.2) {Zone \i};
+    \node[psvc, minimum width=3.8cm] (z\i) at (\x,2.7) {compte, conteneur,\\ objet};
+    \node[pgris, minimum width=3.2cm] (d\i) at (\x,1.2) {disques XFS};
+    \draw[fluxo] (\x,6.4) -- (\x,4.3);
+  }
+  \node[num] at (7.65,5.35) {3};
+  \node[etiqf] at (10.2,5.35) {écrit et lit les répliques};
+  \node[pgris, minimum width=14.0cm, font=\scriptsize\bfseries] (rp) at (7.5,-1.0) {Réplicateurs, updaters, auditors : cohérence entre les zones};
+  \foreach \x in {2.55,7.65,12.75} \draw[<->, thick, insagris] (\x,0.3) -- (\x,-0.65);
+  \node[callout, minimum width=14.2cm] at (7.5,-2.2)
+    {Les proxys n'ont pas d'état : on en ajoute pour la charge, et on ajoute des nœuds pour la capacité.};
+\end{tikzpicture}}
+\caption{Architecture de Swift. Le client s'adresse à un proxy (1), qui consulte le ring (2) puis contacte les serveurs de
+stockage désignés, répartis sur des zones distinctes (3). Les processus d'arrière-plan maintiennent la cohérence.}
+\label{fig:sw-archi}
+\end{figure}
+
+Pour fonctionner, les proxys s'appuient sur un cache memcached, et chaque nœud de stockage dédie ses disques à Swift :
+formatés en XFS et montés sous \texttt{/srv/node}, avec \texttt{rsync} pour la réplication \parencite{swift-install-storage}.
+
+% ---------------------------------------------------------------------
+\subsection{Le ring : où vont les données}\label{sec:sw-ring}
+% ---------------------------------------------------------------------
+
+Le \gls{ring} est la table qui associe le nom d'une entité à son emplacement physique \parencite{swift-architecture}. Swift
+calcule le hachage MD5 du chemin et en garde un nombre configurable de bits, la \emph{partition power} : ces bits désignent
+la \gls{partition} (il y en a $2^{n}$), et le ring donne les disques responsables de chaque partition
+\parencite{swift-ring}. Il y a un ring pour les comptes, un pour les conteneurs et un par politique de stockage.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.5cm, text width=2.3cm] (p) at (1.2,2.6) {Chemin\\ {\scriptsize\mdseries compte, conteneur, objet}};
+  \node[pgris, minimum width=2.5cm, text width=2.3cm] (h) at (4.4,2.6) {Hachage MD5\\ {\scriptsize\mdseries du chemin}};
+  \node[psvc, minimum width=2.5cm, text width=2.3cm] (pa) at (7.6,2.6) {Partition\\ {\scriptsize\mdseries $n$ bits du hachage}};
+  \node[pdat, minimum width=2.5cm, text width=2.3cm] (r) at (10.8,2.6) {Ring\\ {\scriptsize\mdseries partition $\to$ disques}};
+  \node[pgris, minimum width=2.6cm] (d1) at (14.4,4.4) {Zone 1 : sdb};
+  \node[pgris, minimum width=2.6cm] (d2) at (14.4,2.6) {Zone 2 : sdc};
+  \node[pgris, minimum width=2.6cm] (d3) at (14.4,0.8) {Zone 3 : sdb};
+  \draw[fluxr] (p) -- (h) node[num, midway, above=3pt] {1};
+  \draw[fluxr] (h) -- (pa) node[num, midway, above=3pt] {2};
+  \draw[fluxr] (pa) -- (r) node[num, midway, above=3pt] {3};
+  \draw[fluxo] (r.east) -- (d1.west) node[num, pos=0.35, above=3pt] {4};
+  \draw[fluxo] (r.east) -- (d2.west);
+  \draw[fluxo] (r.east) -- (d3.west);
+  \node[callout, minimum width=15.0cm] at (7.7,-0.7)
+    {Trois répliques de la même partition, sur des zones différentes : aucune table d'objets n'est à maintenir.};
+\end{tikzpicture}}
+\caption{Du chemin aux disques. Le chemin est haché (1), le début du hachage désigne une partition (2) ; le ring (3) donne
+les disques qui l'hébergent, en zones distinctes (4).}
+\label{fig:sw-ring}
+\end{figure}
+
+Les répliques d'une partition sont isolées sur autant de régions, de zones, de serveurs et de disques distincts que la
+capacité le permet \parencite{swift-architecture} ; chaque partition est répliquée trois fois par défaut. Un \emph{poids}
+exprime la capacité relative de chaque disque. Les anneaux sont construits à la main avec \texttt{swift-ring-builder} et
+diffusés sous forme de fichiers \texttt{account.ring.gz}, \texttt{container.ring.gz} et \texttt{object.ring.gz}
+\parencite{swift-ring}. Le paramètre \texttt{min\_\allowbreak part\_\allowbreak hours} empêche de déplacer deux fois la même partition dans un
+délai donné, et un seul exemplaire d'une partition est déplacé à la fois. Pour l'anneau des objets :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ swift-ring-builder object.builder create 10 3 1
+$ swift-ring-builder object.builder add \
+    --region 1 --zone 1 --ip 10.0.0.51 --port 6200 --device sdb --weight 100
+$ swift-ring-builder object.builder add \
+    --region 1 --zone 2 --ip 10.0.0.52 --port 6200 --device sdb --weight 100
+$ swift-ring-builder object.builder rebalance
+\end{lstlisting}
+\end{minipage}\par
+
+\texttt{create 10 3 1} fixe la partition power (10), le nombre de répliques (3) et \texttt{min\_part\_hours} (1). On répète
+l'opération pour les anneaux des comptes (port 6202) et des conteneurs (port 6201) \parencite{swift-initial-rings}.
+
+% ---------------------------------------------------------------------
+\subsection{Écrire un objet, répliquer, rester cohérent}\label{sec:sw-ecriture}
+% ---------------------------------------------------------------------
+
+Lors d'un \texttt{PUT}, le proxy authentifie la requête, consulte le ring et envoie l'objet aux serveurs désignés ; l'objet
+traverse le proxy en flux, sans y être mis en mémoire tampon \parencite{swift-architecture}. Si un serveur est indisponible, le
+proxy demande au ring un nœud de secours, un \gls{handoff}. Chaque serveur d'objets met ensuite à jour la liste du
+conteneur (figure~\ref{fig:sw-put}).
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.6cm] (c) at (0.8,0) {Client};
+  \node[acteur, minimum width=2.6cm, fill=insarouge, text=white, draw=black] (p) at (5.2,0) {Proxy};
+  \node[acteur, minimum width=2.6cm, fill=insapeche, draw=insaorange] (o) at (9.6,0) {Serveurs\\ d'objets};
+  \node[acteur, minimum width=2.6cm, fill=insagris!12, draw=insagris] (k) at (14.0,0) {Serveur de\\ conteneur};
+  \foreach \x in {c,p,o,k} \draw[vie] (\x.south) -- ++(0,-8.6);
+  \seqmsg{0.8}{5.2}{-1.3}{1}{\texttt{PUT} de l'objet\\ (token Keystone)}
+  \node[callout, font=\scriptsize, text width=3.4cm] at (5.2,-2.6) {valide le token, consulte le ring};
+  \seqmsg{5.2}{9.6}{-3.8}{2}{objet envoyé aux\\ nœuds du ring (flux)}
+  \seqmsg{9.6}{14.0}{-5.0}{3}{mise à jour de la\\ liste du conteneur}
+  \node[callout, font=\scriptsize, text width=3.4cm] at (11.8,-6.3) {en cas d'échec : mise en file, reprise par l'updater};
+  \seqrep{9.6}{5.2}{-7.2}{}{écrit sur disque, répond}
+  \seqrep{5.2}{0.8}{-8.2}{}{\texttt{201 Created}}
+\end{tikzpicture}}
+\caption{Écriture d'un objet. Le client envoie le \texttt{PUT} (1) ; le proxy dirige l'objet vers les nœuds désignés par le
+ring (2) ; les serveurs d'objets mettent à jour la liste du conteneur (3), puis répondent.}
+\label{fig:sw-put}
+\end{figure}
+
+La cohérence est \emph{éventuelle}. Les réplicateurs fonctionnent par poussée : chaque nœud compare ses copies à celles des
+autres et pousse ce qui manque, avec \texttt{rsync} pour les objets ; une suppression est notée par une \emph{tombstone}
+pour pouvoir elle aussi être répliquée \parencite{swift-replication}. Pendant la « fenêtre de cohérence », qui couvre la durée
+d'une réplication et celle d'une panne transitoire, deux répliques peuvent différer ; si un échec de mise à jour se produit,
+la liste du conteneur est rattrapée plus tard par les updaters \parencite{swift-architecture, swift-replication}. Les
+auditors mettent en quarantaine un fichier corrompu, que la réplication remplace ensuite. Le réplicateur ne rétablit pas à
+lui seul le nombre de répliques après la perte d'un nœud entier \parencite{swift-replication} : c'est à l'opérateur de
+reconstruire le ring.
+
+% ---------------------------------------------------------------------
+\subsection{Politiques de stockage et codage d'effacement}\label{sec:sw-politiques}
+% ---------------------------------------------------------------------
+
+Une \gls{politiquestockage} associe à un conteneur son propre ring, donc ses propres disques et son mode de protection
+\parencite{swift-policies}. Elle se déclare dans \texttt{swift.conf} (une section \texttt{[storage-policy:N]}, avec un anneau
+\texttt{object-N.ring.gz}), se choisit à la création du conteneur et ne peut plus changer ensuite.
+
+Le \gls{erasurecoding} remplace les copies entières par des fragments : l'objet est découpé et complété de fragments de
+parité, de sorte qu'on peut perdre certains fragments sans perdre l'objet \parencite{swift-erasure}. Avec 10 fragments de
+données et 4 de parité, on stocke 14 fragments pour 10 de données, soit 1,4 fois la taille de l'objet, contre 3 fois avec
+trois répliques. En contrepartie, le codage demande nettement plus de processeur ; il convient à de gros objets peu lus.
+C'est le \emph{reconstructor} qui remplace alors le réplicateur \parencite{swift-erasure}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/swift/swift.conf (extrait)
+[storage-policy:0]
+name = standard
+policy_type = replication
+default = yes
+
+[storage-policy:1]
+name = archives
+policy_type = erasure_coding
+ec_type = liberasurecode_rs_vand
+ec_num_data_fragments = 10
+ec_num_parity_fragments = 4
+ec_object_segment_size = 1048576
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack container create --storage-policy archives archives-2026
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Fonctions utiles}\label{sec:sw-fonctions}
+% ---------------------------------------------------------------------
+
+Le tableau~\ref{tab:sw-fonctions} regroupe les mécanismes qui reviennent le plus souvent.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{10.9cm}@{}}
+\toprule
+\textbf{Besoin} & \textbf{Mécanisme} \\
+\midrule
+Rendre un conteneur lisible par tous & \texttt{openstack container create --public} \parencite{osc-container}. \\
+Partager avec d'autres projets & ACL du conteneur : en-têtes \texttt{X-Container-Read} et \texttt{X-Container-Write} \parencite{swift-api-ref}. \\
+Ajouter des métadonnées & \texttt{openstack object set --property} (ou en-têtes \texttt{X-Object-Meta-}\emph{nom}) \parencite{osc-object}. \\
+Supprimer un objet après un délai & En-tête \texttt{X-Delete-After} \parencite{swift-api-ref}. \\
+Garder les anciennes versions & En-tête \texttt{X-Versions-Location} du conteneur \parencite{swift-api-ref}. \\
+Donner un accès temporaire & URL temporaire (\emph{tempurl}) \parencite{swift-api-ref}. \\
+Limiter l'espace d'un compte & Middleware \texttt{account\_\allowbreak quotas} : les écritures sont refusées au-delà du quota \parencite{swift-middleware}. \\
+Parler le protocole S3 & Middleware \texttt{s3api}, qui émule l'API S3 au-dessus de Swift \parencite{swift-middleware}. \\
+Stocker un fichier de plus de 5~Go & Découpage en segments et manifeste (voir ci-dessous). \\
+\bottomrule
+\end{tabular}
+\caption{Fonctions utiles de Swift.}
+\label{tab:sw-fonctions}
+\end{table}
+
+\paragraph{Gros objets.} Par défaut, un objet ne peut pas dépasser 5~Go, afin de garder les partitions équilibrées. Au-delà,
+on le découpe en segments, réunis par un manifeste : un \emph{manifeste dynamique} (DLO) s'appuie sur la liste du conteneur,
+donc sur une information à cohérence éventuelle, mais accepte d'ajouter ou de retirer des segments ; un \emph{manifeste
+statique} (SLO) est un fichier fourni par l'utilisateur, qui permet de répartir les segments sur plusieurs conteneurs et de
+télécharger l'objet complet dès que le manifeste est écrit, mais qui est figé une fois déposé \parencite{swift-large-objects}.
+La commande \texttt{swift upload -S} fixe la taille des segments, rangés dans un conteneur nommé \texttt{<conteneur>\_segments}.
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre et dépannage}\label{sec:sw-deploiement}
+% ---------------------------------------------------------------------
+
+L'installation suppose que Keystone est déjà en place \parencite{swift-install}. Sur le contrôleur, on crée l'utilisateur
+\texttt{swift}, le service de type \texttt{object-store} et ses endpoints sur le port 8080 ; on installe le proxy et
+memcached, puis on règle le \emph{pipeline} de \texttt{proxy-server.conf}, la suite de middlewares que traverse chaque
+requête (dont \texttt{authtoken} et \texttt{keystoneauth} pour l'authentification) \parencite{swift-install-controller}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack service create --name swift --description "OpenStack Object Storage" object-store
+$ openstack endpoint create --region RegionOne object-store public \
+    http://controller:8080/v1/AUTH_%\(project_id\)s
+\end{lstlisting}
+\end{minipage}\par
+
+Sur chaque nœud de stockage, on formate les disques en XFS, on les monte sous \texttt{/srv/node} (option \texttt{noatime}),
+on configure \texttt{rsyncd.conf} avec trois modules (\texttt{account}, \texttt{container}, \texttt{object}) et les trois
+serveurs, qui écoutent sur les ports 6202, 6201 et 6200, avec \texttt{devices = /srv/node} et \texttt{mount\_check = True}
+\parencite{swift-install-storage}. On construit enfin les anneaux (section~\ref{sec:sw-ring}) et on les copie sur chaque nœud.
+On vérifie avec les commandes suivantes \parencite{swift-verify} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ swift stat
+$ openstack container create container1
+$ openstack object create container1 FILE
+$ openstack object list container1
+$ openstack object save container1 FILE
+\end{lstlisting}
+\end{minipage}\par
+
+Pour que Cinder range ses sauvegardes dans Swift, on règle son service de sauvegarde ; le conteneur par défaut est
+\texttt{volumebackups} \parencite{cinder-backup-swift} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/cinder/cinder.conf (extrait)
+[DEFAULT]
+backup_driver = cinder.backup.drivers.swift.SwiftBackupDriver
+backup_swift_container = volumebackups
+\end{lstlisting}
+\end{minipage}\par
+
+Le tableau~\ref{tab:sw-pannes} résume les pannes courantes.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.4cm}>{\raggedright\arraybackslash}p{5.8cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+Requêtes refusées (401, 403) & Token expiré, rôle insuffisant sur le projet, ou ACL du conteneur restrictive. & \texttt{openstack token issue} ; ACL du conteneur \\
+Envoi d'un gros fichier refusé & L'objet dépasse la taille maximale (5~Go par défaut). & Envoyer par segments (\texttt{swift upload -S}) \\
+Objet absent de la liste juste après l'envoi & Fenêtre de cohérence : la liste du conteneur n'est pas encore à jour. & Réessayer ; journaux de l'updater \\
+Disque ignoré & Disque non monté sous \texttt{/srv/node} alors que \texttt{mount\_\allowbreak check = True}. & \texttt{mount} ; \texttt{fstab} \\
+Répliques inégales après un ajout de disque & Les partitions se déplacent progressivement, ou les fichiers de ring ne sont pas les mêmes partout. & \texttt{swift-ring-builder object.builder} ; copie des \texttt{.ring.gz} \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Swift.}
+\label{tab:sw-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:sw-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Dimensionner un ring}\label{ex:sw-ring}
+Un ring d'objets a une partition power de 10, trois répliques et quatre disques de même poids, répartis sur deux nœuds
+(deux zones). (a)~Combien de partitions existe-t-il ? (b)~Combien de copies de partitions au total, et par disque ?
+(c)~Que peut-on dire de la répartition des trois répliques d'une partition, et que conseiller ?
+\end{exercice}
+\begin{correction}
+(a)~$2^{10} = 1\,024$ partitions. (b)~$3 \times 1\,024 = 3\,072$ copies, soit $3\,072 / 4 = 768$ par disque. (c)~Avec deux zones
+seulement, au moins une zone héberge deux répliques d'une même partition : le ring les isole « autant que la capacité le
+permet ». La perte d'une zone entière peut donc faire disparaître deux répliques sur trois ; il faut au moins trois zones
+pour la tolérer.
+\end{correction}
+
+\begin{exercice}{Un fichier de 12 Gio}\label{ex:sw-gros}
+Un utilisateur doit déposer un fichier de 12~Gio, mais l'envoi direct échoue. (a)~Pourquoi ? (b)~Quelle commande
+utiliser, et que se passe-t-il côté Swift ? (c)~Quel type de manifeste choisir si l'on veut télécharger l'objet complet dès
+la fin de l'envoi ?
+\end{exercice}
+\begin{correction}
+(a)~La taille maximale d'un objet est de 5~Go par défaut. (b)~\texttt{swift upload gros -S 1073741824 gros.iso} découpe le
+fichier en segments de 1~Gio, ici 12, envoyés en parallèle et rangés dans le conteneur \texttt{gros\_segments}, avec un
+manifeste dans \texttt{gros}. (c)~Un manifeste statique (SLO) : l'objet complet peut être téléchargé dès que le manifeste est
+écrit, alors qu'un manifeste dynamique dépend de la liste du conteneur, à cohérence éventuelle.
+\end{correction}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{exercice}{Des archives économiques}\label{ex:sw-archives}
+On veut conserver 100~To de données utiles en archives, rarement lues. (a)~Quel espace brut faut-il avec trois répliques, et
+avec un codage 10+4 ? (b)~Comment mettre en place cette politique ? (c)~Quel inconvénient prévoir ?
+\end{exercice}
+\begin{correction}
+(a)~Trois répliques : $3 \times 100 = 300$~To. Codage 10+4 : $100 \times 14/10 = 140$~To. (b)~Déclarer une politique
+\texttt{erasure\_coding} dans \texttt{swift.conf} (10 fragments de données, 4 de parité), construire son anneau
+\texttt{object-1.ring.gz}, redémarrer les services, puis créer le conteneur avec
+\texttt{openstack container create --storage-policy archives archives-2026}. (c)~Le codage consomme nettement plus de
+processeur, et la politique d'un conteneur ne se change pas : il faudrait recréer le conteneur et recopier les objets.
+\end{correction}
+\end{minipage}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:sw-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Swift stocke des objets (données et métadonnées) dans des conteneurs, eux-mêmes dans un compte (un projet) ; on y
+        accède par une API REST, sans disque monté.
+  \item Les proxys, sans état, exposent l'API ; les serveurs de comptes, de conteneurs et d'objets stockent les données.
+  \item Le ring, fondé sur le hachage MD5 du chemin, place chaque partition sur trois disques (par défaut), en zones
+        aussi distinctes que possible.
+  \item La cohérence est éventuelle : réplicateurs, updaters et auditors rattrapent les écarts.
+  \item Une politique de stockage choisit le ring et le mode de protection d'un conteneur (réplication ou codage
+        d'effacement) ; on ne la change pas après coup.
+  \item Au-delà de 5~Go par défaut, un objet est découpé en segments avec un manifeste (DLO ou SLO).
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{9.9cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer un conteneur, déposer & \texttt{openstack container create C}, \texttt{openstack object create C F} & \ref{sec:sw-role} \\
+Lire un objet & \texttt{openstack object list C}, \texttt{openstack object save C F} & \ref{sec:sw-role} \\
+Construire un ring & \texttt{swift-ring-builder object.builder create 10 3 1}, \texttt{add}, \texttt{rebalance} & \ref{sec:sw-ring} \\
+Choisir une politique & \texttt{openstack container create --storage-policy P C} & \ref{sec:sw-politiques} \\
+Envoyer un gros fichier & \texttt{swift upload C -S taille F} & \ref{sec:sw-fonctions} \\
+Vérifier l'installation & \texttt{swift stat} & \ref{sec:sw-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Calculer le nombre de partitions et de copies d'un ring, et en tirer les limites de la répartition par zones
+        (exercice~\ref{ex:sw-ring}).
+  \item Déposer un gros objet avec des segments et choisir entre DLO et SLO (exercice~\ref{ex:sw-gros}).
+  \item Choisir entre réplication et codage d'effacement et créer le conteneur correspondant (exercice~\ref{ex:sw-archives}).
+\end{itemize}
+\end{savoirfaire}

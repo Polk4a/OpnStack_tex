@@ -5,7 +5,7 @@ Structure LaTeX d'un cours sur OpenStack, basée sur le template INSA CVL
 glossaire, bibliographie biblatex/APA. **Un chapitre = un fichier `chap_<nom>.tex`.**
 **Avancement :** introduction/présentation (squelette), **Keystone** (complet, ~39 pages),
 **Nova** (8 pages), **Placement** (7 pages), **Glance** (7 pages), **Neutron** (8 pages),
-**Cinder** (9 pages) et **Horizon** (9 pages) rédigés. Les autres chapitres de service et la
+**Cinder** (9 pages), **Horizon** (9 pages), **Octavia** (9 pages) et **Swift** (8 pages) rédigés. Les autres chapitres de service et la
 conclusion sont encore vides (titre + `\label`) ; ils seront rédigés selon les mêmes règles
 (voir « Conventions des chapitres rédigés »). Keystone est le chapitre « exhaustif » ; les
 suivants sont plus synthétiques (10 pages au plus, schémas conservés).
@@ -29,7 +29,7 @@ la compilation échoue sans lui).
 - `I do not know the key '/tikz/pcli'` : `main.tex` est une ancienne copie, sans le second
   `\tikzset{…}` (styles de schémas). Utiliser le `main.tex` du projet.
 - `Undefined control sequence \seqmsg` (ou `\seqrep`) : les chapitres Nova, Placement, Neutron,
-  Cinder et Horizon tracent leurs diagrammes de séquence avec ces deux macros, définies dans `main.tex` juste après
+  Cinder, Horizon, Octavia et Swift tracent leurs diagrammes de séquence avec ces deux macros, définies dans `main.tex` juste après
   le second `\tikzset`. Si elles manquent, les ajouter :
 
 ```latex
@@ -58,16 +58,16 @@ chap_glance.tex       5.  Glance : images  (RÉDIGÉ, 7 pages)
 chap_neutron.tex      6.  Neutron : réseau  (RÉDIGÉ, 8 pages)
 chap_cinder.tex       7.  Cinder : stockage bloc  (RÉDIGÉ, 9 pages)
 chap_horizon.tex      8.  Horizon : tableau de bord  (RÉDIGÉ, 9 pages)
-chap_octavia.tex      9.  Octavia : répartition de charge
-chap_swift.tex        10. Swift : stockage objet
+chap_octavia.tex      9.  Octavia : répartition de charge  (RÉDIGÉ, 9 pages)
+chap_swift.tex        10. Swift : stockage objet  (RÉDIGÉ, 8 pages)
 chap_heat.tex         11. Heat : orchestration
 chap_ironic.tex       12. Ironic : bare metal
 chap_magnum.tex       13. Magnum : Kubernetes managé
 chap_trove.tex        14. Trove : bases de données (DBaaS)
 chap_deploiement.tex  15. Méthodes de déploiement (hors service)
 conclusion.tex        Conclusion (non numérotée, vide)
-glossaire.tex         Entrées du glossaire (84 entrées : Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon)
-sources.bib           Bibliographie (89 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Trove)
+glossaire.tex         Entrées du glossaire (101 entrées : Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift)
+sources.bib           Bibliographie (117 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift, Trove)
 images/               logo_insa.png à y déposer
 ```
 
@@ -81,11 +81,11 @@ pour réordonner ou retirer un chapitre, déplacer ou supprimer une ligne.
 |---|---|
 | Présentation générale | Introduction_OpenStack : cloud, IaaS, architecture, multi-nœuds, scénario « création d'une VM », comparaisons |
 | Keystone | Introduction (identité, authentification/autorisation) ; Chapitre 5 partie 1 (domaines, fédération SAML2/OIDC) |
-| Nova, Placement, Glance (rédigés) ; Octavia | Introduction_OpenStack (une partie chacun) |
+| Nova, Placement, Glance, Octavia (rédigés) | Introduction_OpenStack (une partie chacun ; Octavia : partie 12) ; le reste vient de la documentation officielle |
 | Horizon (rédigé) | Introduction (partie 10 : Horizon n'est qu'un client des API) ; le reste vient de la documentation officielle d'Horizon et du guide de sécurité |
 | Neutron (rédigé) | Introduction (concepts, ports, security groups) ; Chapitre 2 (provider/self-service, OVS, OVN, ML2) |
 | Cinder (rédigé) | Introduction ; Chapitre 3 partie 1 (multi-backend, volume types, QoS, snapshots, backups) |
-| Swift | Chapitre 3 partie 2 |
+| Swift (rédigé) | Chapitre 3 partie 2 ; le reste vient de la documentation officielle de Swift |
 | Heat | Chapitre 3 partie 3 |
 | Ironic, Magnum | Chapitre 5 parties 2 et 3 |
 | Trove | Chapitre 5 partie 4 ; présentation Trove (groupe 5) |
@@ -135,13 +135,17 @@ Règles LaTeX à connaître : dans un item de liste (`enumerate`, `itemize`), un
 (chemin de fichier, identifiant) ne se coupe pas, même avec `\allowbreak` (avec ce préambule, babel-french
 et `enumitem`) : le mettre dans un paragraphe, ou le scinder en plusieurs `\texttt`. Dans un nom
 d'option, écrire `\_\allowbreak` après chaque tiret bas. Pour que les tableaux de dépannage restent
-près de leur texte, on peut les placer avec `\begin{table}[H]` (paquet `float`).
+près de leur texte, on peut les placer avec `\begin{table}[H]` (paquet `float`). Pour garder un
+exercice et son corrigé sur la même page, on peut les envelopper dans un `minipage` (chapitre Swift,
+exercice 10.3), mais pas si le corrigé contient un listing : le listing y est coupé par un trou
+(`correction` est un `tcolorbox` coupable). On insère alors un `\clearpage` avant la sous-section
+des exercices (chapitre Octavia).
 
 ## Conventions des chapitres rédigés
 
 - Un chapitre = une `\section{…}\label{chap:<nom>}` ; sous-sections `sec:<nom>-<sujet>`,
   figures `fig:<nom>-…`, tableaux `tab:<nom>-…`, exercices `ex:<nom>-…`.
-- Chapitres synthétiques (Nova, Placement, Glance, Neutron, Cinder, Horizon et suivants) : 10 pages au plus ; mêmes sections, mais
+- Chapitres synthétiques (Nova, Placement, Glance, Neutron, Cinder, Horizon, Octavia, Swift et suivants) : 10 pages au plus ; mêmes sections, mais
   une figure par idée clé (environnement, architecture, séquence, ordonnancement/états), 3 exercices
   courts et un récapitulatif sans schéma de synthèse.
 - Contenu type : rôle du service et place dans OpenStack (schéma structure + interactions) ;
