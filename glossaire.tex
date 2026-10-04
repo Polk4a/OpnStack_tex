@@ -108,3 +108,64 @@
 
 \newglossaryentry{wsgi}{name={WSGI}, sort={WSGI},
   description={\emph{Web Server Gateway Interface} : interface standard entre un serveur web et une application Python ; Keystone s'exécute derrière Apache grâce à \texttt{mod\_wsgi}}}
+
+% ---- Nova et Placement ------------------------------------------------
+\newglossaryentry{instance}{name={instance}, sort={instance},
+  description={Machine virtuelle créée et gérée par Nova ; on parle aussi de serveur (\texttt{openstack server})}}
+
+\newglossaryentry{flavor}{name={gabarit (flavor)}, sort={gabarit}, text={gabarit},
+  description={Modèle de taille d'une instance : nombre de vCPU, mémoire, disque racine, disque éphémère, swap, et propriétés supplémentaires (\emph{extra specs})}}
+
+\newglossaryentry{noeudcalcul}{name={nœud de calcul (compute node)}, sort={noeud de calcul}, text={nœud de calcul},
+  description={Serveur physique qui héberge les instances : il exécute \texttt{nova-compute} et un hyperviseur}}
+
+\newglossaryentry{ordonnanceur}{name={ordonnanceur (scheduler)}, sort={ordonnanceur}, text={ordonnanceur},
+  description={Composant de Nova (\texttt{nova-scheduler}) qui choisit le nœud de calcul où placer une instance}}
+
+\newglossaryentry{conductor}{name={conductor}, sort={conductor},
+  description={Composant de Nova (\texttt{nova-conductor}) qui coordonne les opérations longues (construction, redimensionnement, migration) et sert d'intermédiaire entre les nœuds de calcul et la base de données}}
+
+\newglossaryentry{cellule}{name={cellule (cell)}, sort={cellule}, text={cellule},
+  description={Groupe de nœuds de calcul de Nova qui possède sa propre base de données et sa propre file de messages ; tout déploiement a au moins une cellule}}
+
+\newglossaryentry{libvirt}{name={libvirt}, sort={libvirt},
+  description={Bibliothèque et service de pilotage des hyperviseurs (KVM/QEMU en particulier) que \texttt{nova-compute} utilise pour créer et contrôler les machines virtuelles}}
+
+\newglossaryentry{busmessages}{name={bus de messages}, sort={bus de messages}, text={bus de messages},
+  description={File de messages (RabbitMQ en général) par laquelle les composants d'un service échangent des appels distants (RPC, via \texttt{oslo.messaging})}}
+
+\newglossaryentry{microversion}{name={microversion}, sort={microversion},
+  description={Numéro de version fin d'une API OpenStack (pour Nova : 2.1, 2.2, 2.3 et ainsi de suite) : le client demande la version dont il a besoin, ce qui garde l'API compatible}}
+
+\newglossaryentry{migrationchaud}{name={migration à chaud (live migration)}, sort={migration a chaud}, text={migration à chaud},
+  description={Déplacement d'une instance en cours d'exécution d'un nœud de calcul vers un autre, sans l'arrêter}}
+
+\newglossaryentry{surallocation}{name={surallocation (overcommit)}, sort={surallocation}, text={surallocation},
+  description={Attribution de plus de ressources virtuelles qu'il n'y en a de physiques ; elle se règle par un ratio d'allocation}}
+
+\newglossaryentry{agregat}{name={agrégat d'hôtes (host aggregate)}, sort={agregat}, text={agrégat d'hôtes},
+  description={Groupe de nœuds de calcul défini par l'administrateur, avec des métadonnées ; il sert à l'ordonnancement et à définir des zones de disponibilité}}
+
+\newglossaryentry{zonedispo}{name={zone de disponibilité}, sort={zone de disponibilite}, text={zone de disponibilité},
+  description={Groupe de nœuds de calcul que l'utilisateur peut viser à la création d'une instance (par exemple une salle ou une baie) ; c'est un agrégat d'hôtes visible des utilisateurs}}
+
+\newglossaryentry{fournisseur}{name={fournisseur de ressources (resource provider)}, sort={fournisseur de ressources}, text={fournisseur de ressources},
+  description={Entité de Placement qui offre un inventaire de ressources consommables : un nœud de calcul, un pool de stockage partagé, etc.}}
+
+\newglossaryentry{inventaire}{name={inventaire}, sort={inventaire},
+  description={Quantité d'une classe de ressources offerte par un fournisseur : total, réservé, ratio d'allocation, taille minimale, maximale et pas d'allocation}}
+
+\newglossaryentry{classeressources}{name={classe de ressources}, sort={classe de ressources}, text={classe de ressources},
+  description={Type de ressource quantitative suivie par Placement : \texttt{VCPU}, \texttt{MEMORY\_MB}, \texttt{DISK\_GB}, ou une classe personnalisée préfixée par \texttt{CUSTOM\_}}}
+
+\newglossaryentry{allocation}{name={allocation}, sort={allocation},
+  description={Quantité de ressources d'un fournisseur attribuée à un consommateur ; elle diminue d'autant la capacité disponible}}
+
+\newglossaryentry{consommateur}{name={consommateur (consumer)}, sort={consommateur}, text={consommateur},
+  description={Entité qui détient des allocations dans Placement, identifiée par un UUID : pour Nova, une instance ou une migration}}
+
+\newglossaryentry{trait}{name={trait}, sort={trait},
+  description={Caractéristique qualitative d'un fournisseur (par exemple \texttt{HW\_CPU\_X86\_AVX2} ou \texttt{STORAGE\_DISK\_SSD}) ; les traits non standard commencent par \texttt{CUSTOM\_}}}
+
+\newglossaryentry{claim}{name={réservation (claim)}, sort={reservation}, text={réservation},
+  description={Création d'une allocation dans Placement pour une instance, faite par l'ordonnanceur une fois l'hôte choisi ; si elle échoue, c'est qu'un autre consommateur a pris les ressources entre-temps}}

@@ -3,10 +3,11 @@
 Structure LaTeX d'un cours sur OpenStack, basée sur le template INSA CVL
 (`info_quantiq_tex`) : charte rouge/gris, en-tête avec logo, page de titre, sommaire,
 glossaire, bibliographie biblatex/APA. **Un chapitre = un fichier `chap_<nom>.tex`.**
-**Avancement :** introduction/présentation (squelette), **chapitre Keystone complet**
-(schémas TikZ, exercices corrigés, récapitulatif). Les autres chapitres de service et la
+**Avancement :** introduction/présentation (squelette), **Keystone** (complet, ~39 pages),
+**Nova** (8 pages) et **Placement** (7 pages) rédigés. Les autres chapitres de service et la
 conclusion sont encore vides (titre + `\label`) ; ils seront rédigés selon les mêmes règles
-(voir « Conventions des chapitres rédigés »).
+(voir « Conventions des chapitres rédigés »). Keystone est le chapitre « exhaustif » ; les
+suivants sont plus synthétiques (10 pages au plus, schémas conservés).
 
 ## Compilation
 
@@ -30,8 +31,8 @@ pagetitre.tex         Page de titre (motif : services / API REST / infrastructur
 introduction.tex      Introduction (non numérotée) : présentation du cours et plan
 chap_presentation.tex 1.  Présentation générale d'OpenStack (sous-sections seulement)
 chap_keystone.tex     2.  Keystone : identité  (RÉDIGÉ, ~39 pages)
-chap_nova.tex         3.  Nova : calcul
-chap_placement.tex    4.  Placement : suivi des ressources
+chap_nova.tex         3.  Nova : calcul  (RÉDIGÉ, 8 pages)
+chap_placement.tex    4.  Placement : suivi des ressources  (RÉDIGÉ, 7 pages)
 chap_glance.tex       5.  Glance : images
 chap_neutron.tex      6.  Neutron : réseau
 chap_cinder.tex       7.  Cinder : stockage bloc
@@ -44,8 +45,8 @@ chap_magnum.tex       13. Magnum : Kubernetes managé
 chap_trove.tex        14. Trove : bases de données (DBaaS)
 chap_deploiement.tex  15. Méthodes de déploiement (hors service)
 conclusion.tex        Conclusion (non numérotée, vide)
-glossaire.tex         Entrées du glossaire (~33 entrées, vocabulaire Keystone)
-sources.bib           Bibliographie (27 entrées @online : documentation OpenStack, Keystone, Trove)
+glossaire.tex         Entrées du glossaire (~54 entrées : Keystone, Nova, Placement)
+sources.bib           Bibliographie (42 entrées @online : documentation OpenStack, Keystone, Nova, Placement, Trove)
 images/               logo_insa.png à y déposer
 ```
 
@@ -59,7 +60,7 @@ pour réordonner ou retirer un chapitre, déplacer ou supprimer une ligne.
 |---|---|
 | Présentation générale | Introduction_OpenStack : cloud, IaaS, architecture, multi-nœuds, scénario « création d'une VM », comparaisons |
 | Keystone | Introduction (identité, authentification/autorisation) ; Chapitre 5 partie 1 (domaines, fédération SAML2/OIDC) |
-| Nova, Placement, Glance, Horizon, Octavia | Introduction_OpenStack (une partie chacun) |
+| Nova, Placement (rédigés) ; Glance, Horizon, Octavia | Introduction_OpenStack (une partie chacun) |
 | Neutron | Introduction (concepts, ports, security groups) ; Chapitre 2 (provider/self-service, OVS, OVN, ML2) |
 | Cinder | Introduction ; Chapitre 3 partie 1 (multi-backend, volume types, QoS, snapshots, backups) |
 | Swift | Chapitre 3 partie 2 |
@@ -112,6 +113,9 @@ destination d'un `to[...]` (le nœud se retrouve alors sur la destination, pas s
 
 - Un chapitre = une `\section{…}\label{chap:<nom>}` ; sous-sections `sec:<nom>-<sujet>`,
   figures `fig:<nom>-…`, tableaux `tab:<nom>-…`, exercices `ex:<nom>-…`.
+- Chapitres synthétiques (Nova, Placement et suivants) : 10 pages au plus ; mêmes sections, mais
+  une figure par idée clé (environnement, architecture, séquence, ordonnancement/états), 3 exercices
+  courts et un récapitulatif sans schéma de synthèse.
 - Contenu type : rôle du service et place dans OpenStack (schéma structure + interactions) ;
   concepts ; architecture interne ; configuration et commandes ; exploitation et diagnostic ;
   sécurité et limites ; exercices corrigés ; récapitulatif (schéma de synthèse, `aretenir`,

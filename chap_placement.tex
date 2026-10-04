@@ -2,10 +2,462 @@
 %  Chapitre « Placement : le suivi des ressources »
 %  Fichier importé par main.tex avec \include{chap_placement}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Introduction à OpenStack » (partie 11), documentation
+%  officielle de Placement et de Nova (voir sources.bib). Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Placement : le suivi des ressources}\label{chap:placement}
+% =====================================================================
+
+Placement est le service qui sait ce que chaque serveur peut offrir et ce qui est déjà consommé. Nova
+l'interroge à chaque création d'instance. Ce chapitre présente son modèle de données (fournisseurs,
+inventaires, allocations), la façon dont on calcule la capacité d'un serveur, les requêtes que Nova lui
+adresse et la gestion des accès concurrents, puis l'installation et le diagnostic.
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Placement}\label{sec:pl-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Placement}
+Placement est un service d'inventaire : il enregistre, pour chaque \gls{fournisseur}, les quantités de chaque
+\gls{classeressources} qu'il offre (\texttt{VCPU}, \texttt{MEMORY\_MB}, \texttt{DISK\_GB}\dots), ses \glspl{trait},
+et les \glspl{allocation} déjà accordées. Il répond à la question « quels fournisseurs peuvent accueillir cette
+demande ? » et enregistre les réservations \parencite{placement-user}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Savoir de façon fiable et rapide quels serveurs ont assez de ressources, même quand
+        plusieurs ordonnanceurs travaillent en même temps.
+  \item \textbf{Communique avec.} \texttt{nova-compute}, qui publie l'inventaire de son nœud, et
+        \texttt{nova-scheduler}, qui interroge et réserve. D'autres projets (Neutron, Cyborg) peuvent y créer
+        des fournisseurs enfants pour leurs propres ressources.
+  \item \textbf{À retenir.} Placement ne place rien : il tient les comptes. Le choix final de l'hôte appartient à
+        l'ordonnanceur de Nova (chapitre~\ref{chap:nova}).
+\end{itemize}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[psvc, minimum width=2.6cm] (ks) at (6.5,6.2) {Keystone};
+  \node[pfoc, minimum width=3.8cm, minimum height=1.4cm] (pl) at (6.5,3.4) {Placement\\ {\scriptsize\mdseries inventaires, allocations}};
+  \node[psvc, minimum width=3.2cm] (nc) at (0.9,5.0) {nova-compute\\ {\scriptsize\mdseries sur chaque nœud}};
+  \node[psvc, minimum width=3.2cm] (ns) at (0.9,1.8) {nova-scheduler};
+  \node[psvc, minimum width=3.0cm] (ot) at (12.0,3.4) {Neutron, Cyborg\\ {\scriptsize\mdseries fournisseurs enfants}};
+  \node[pdat, minimum width=3.4cm] (db) at (6.5,0.6) {Base \texttt{placement}};
+  \draw[fluxo] (pl) -- (ks) node[etiqf, midway, right=2pt] {valide le token};
+  \draw[fluxr] (nc.east) -- (pl.north west)
+    node[num, pos=0.15, above=3pt] {1} node[etiqf, midway, above=2pt] {inventaire, traits};
+  \draw[fluxo, <->] (ns.east) -- (pl.south west)
+    node[num, pos=0.3, above left=1pt and 3pt] {2} node[etiqf, midway, below right=1pt and 0pt, text width=2.2cm] {candidats ?\\ réservation (3)};
+  \draw[fluxo] (ot.west) -- (pl.east) node[etiqf, midway, above=1pt] {inventaire};
+  \draw[<->, thick, insagris] (pl) -- (db);
+  \node[callout, minimum width=13.2cm] at (6.5,-0.8)
+    {Placement répond « qui peut accueillir cette demande ? » et tient les comptes ; il ne choisit pas l'hôte.};
+\end{tikzpicture}}
+\caption{Placement et ses clients. \texttt{nova-compute} publie l'inventaire de son nœud (1) ;
+\texttt{nova-scheduler} demande les candidats (2) puis réserve les ressources de l'hôte retenu (3).}
+\label{fig:pl-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Modèle de données}\label{sec:pl-modele}
+% ---------------------------------------------------------------------
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.7cm}>{\raggedright\arraybackslash}p{11.8cm}@{}}
+\toprule
+\textbf{Objet} & \textbf{Définition} \\
+\midrule
+\Gls{fournisseur} & Entité qui offre des ressources : un nœud de calcul, un pool de stockage partagé, un
+  périphérique. Les fournisseurs peuvent former un arbre (fournisseur racine et enfants). \\
+\Gls{classeressources} & Type de ressource quantitative. Standard : \texttt{VCPU}, \texttt{MEMORY\_MB},
+  \texttt{DISK\_GB}, \texttt{PCI\_DEVICE}, \texttt{SRIOV\_NET\_VF}\dots ; personnalisées : préfixe \texttt{CUSTOM\_}. \\
+\Gls{inventaire} & Quantité d'une classe offerte par un fournisseur (champs détaillés plus bas). \\
+\Gls{allocation} & Quantité d'une classe prise sur un fournisseur par un consommateur. \\
+\Gls{consommateur} & Détenteur d'allocations, identifié par un UUID : pour Nova, l'instance. \\
+\Gls{trait} & Caractéristique qualitative d'un fournisseur (\texttt{HW\_CPU\_X86\_AVX2},
+  \texttt{STORAGE\_DISK\_SSD}). Les traits standard sont en lecture seule ; les autres commencent par \texttt{CUSTOM\_}. \\
+Agrégat & Groupe de fournisseurs, pour modéliser un stockage partagé, une affinité ou une zone de disponibilité. \\
+\bottomrule
+\end{tabular}
+\caption{Les objets de Placement \parencite{placement-api-ref}.}
+\label{tab:pl-objets}
+\end{table}
+
+La figure~\ref{fig:pl-modele} montre un nœud de calcul tel que Placement le voit : un fournisseur avec trois
+inventaires, deux traits, et deux instances qui détiennent chacune une allocation.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,0.5) rectangle (9.9,6.4);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,6.3) {Fournisseur de ressources \texttt{compute1}};
+  % en-têtes de l'inventaire
+  \foreach \x/\t in {1.7/{classe}, 4.0/{total}, 5.3/{réservé}, 6.6/{ratio}, 8.4/{capacité}} {
+    \node[font=\scriptsize\bfseries, text=insagris] at (\x,5.5) {\t};
+  }
+  \foreach \y/\c/\t/\r/\a/\cap in {4.7/{VCPU}/8/0/4.0/32, 3.9/{MEMORY\_MB}/32768/512/1.0/32256, 3.1/{DISK\_GB}/500/0/1.0/500} {
+    \node[pdat, minimum width=2.6cm, font=\scriptsize\bfseries] at (1.7,\y) {\texttt{\c}};
+    \node[font=\footnotesize] at (4.0,\y) {\t};
+    \node[font=\footnotesize] at (5.3,\y) {\r};
+    \node[font=\footnotesize] at (6.6,\y) {\a};
+    \node[font=\footnotesize\bfseries] at (8.4,\y) {\cap};
+  }
+  \node[anchor=west, font=\scriptsize\itshape, text=insagris] at (0.4,2.2) {traits :};
+  \node[pgris, font=\scriptsize\bfseries] at (3.5,2.2) {\texttt{HW\_CPU\_X86\_AVX2}};
+  \node[pgris, font=\scriptsize\bfseries] at (7.2,2.2) {\texttt{STORAGE\_DISK\_SSD}};
+  \node[font=\scriptsize\itshape, text=insagris] at (5.0,1.1) {capacité = (total $-$ réservé) $\times$ ratio};
+  % consommateurs
+  \node[pcli, minimum width=4.4cm, text width=4.2cm] (v1) at (14.2,4.7) {instance \texttt{vm1}\\ {\scriptsize\mdseries VCPU 2, MEMORY\_MB 4096, DISK\_GB 20}};
+  \node[pcli, minimum width=4.4cm, text width=4.2cm] (v2) at (14.2,2.4) {instance \texttt{vm2}\\ {\scriptsize\mdseries VCPU 4, MEMORY\_MB 8192, DISK\_GB 40}};
+  \draw[fluxr] (v1.west) -- (9.9,4.7) node[etiqf, midway, above=1pt] {allocation};
+  \draw[fluxr] (v2.west) -- (9.9,2.4) node[etiqf, midway, above=1pt] {allocation};
+  \node[callout, minimum width=15.6cm] at (8.0,-0.6)
+    {Utilisé = somme des allocations : ici 6 vCPU sur 32 de capacité, 12\,288\,Mo sur 32\,256.};
+\end{tikzpicture}}
+\caption{Un nœud de calcul dans Placement : un fournisseur, ses inventaires, ses traits et les allocations de
+deux consommateurs.}
+\label{fig:pl-modele}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Inventaire et capacité}\label{sec:pl-inventaire}
+% ---------------------------------------------------------------------
+
+Chaque inventaire décrit une classe de ressources par six champs \parencite{placement-api-ref} :
+\texttt{total} (quantité réelle), \texttt{reserved} (part gardée pour le fournisseur lui-même),
+\texttt{allocation\_ratio} (facteur de \gls{surallocation}), \texttt{min\_unit} et \texttt{max\_unit} (plus petite et
+plus grande quantité allouable en une fois), \texttt{step\_size} (pas de l'allocation, par exemple 5 pour 5, 10, 15\dots).
+La capacité qu'une allocation ne doit pas dépasser s'écrit \parencite{placement-source} :
+\[
+\text{capacité} = (\texttt{total} - \texttt{reserved}) \times \texttt{allocation\_ratio},
+\qquad
+\text{utilisé} + \text{demandé} \le \text{capacité}.
+\]
+
+\begin{pointcle}
+Placement compte les \emph{allocations}, pas la consommation réelle. Une instance de 4 vCPU qui n'utilise
+aucun processeur occupe quand même 4 vCPU de la capacité.
+\end{pointcle}
+
+\paragraph{Exemple.} Pour 8 cœurs avec un ratio de 4, la capacité est de $8\times4=32$ vCPU. Pour
+32\,768\,Mo de mémoire dont 512 réservés, avec un ratio de 1, elle est de $(32\,768-512)\times1=32\,256$\,Mo. Si les
+instances \texttt{vm1} et \texttt{vm2} de la figure~\ref{fig:pl-modele} sont seules, il reste 26 vCPU et
+19\,968\,Mo (et la place pour 13 instances de 2 vCPU, mais seulement 4 de 4\,096\,Mo~: la mémoire limite avant les
+vCPU).
+
+C'est \texttt{nova-compute} qui renseigne l'inventaire de son nœud, à partir de la configuration et du matériel,
+et le met à jour périodiquement. Trois options de \texttt{nova.conf} interviennent \parencite{nova-config} :
+
+\begin{itemize}
+  \item \texttt{reserved\_\allowbreak host\_\allowbreak memory\_\allowbreak mb} (512 par défaut), \texttt{reserved\_\allowbreak host\_\allowbreak disk\_\allowbreak mb} (0) et
+        \texttt{reserved\_\allowbreak host\_\allowbreak cpus} (0) alimentent le champ \texttt{reserved} ;
+  \item \texttt{initial\_\allowbreak cpu\_\allowbreak allocation\_\allowbreak ratio} (4,0 dans les versions récentes ; 16,0 auparavant),
+        \texttt{initial\_\allowbreak ram\_\allowbreak allocation\_\allowbreak ratio} (1,0 ; 1,5 auparavant) et
+        \texttt{initial\_\allowbreak disk\_\allowbreak allocation\_\allowbreak ratio} (1,0) donnent le ratio à la création de l'inventaire ;
+  \item \texttt{cpu\_\allowbreak allocation\_\allowbreak ratio}, \texttt{ram\_\allowbreak allocation\_\allowbreak ratio} et \texttt{disk\_\allowbreak allocation\_\allowbreak ratio}, quand ils sont
+        fixés, imposent la valeur à chaque mise à jour \parencite{nova-scheduling}.
+\end{itemize}
+
+% ---------------------------------------------------------------------
+\subsection{Requêtes et candidats}\label{sec:pl-requetes}
+% ---------------------------------------------------------------------
+
+Pour une création d'instance, Nova traduit le gabarit en une requête de candidats d'allocation
+(\texttt{GET /allocation\_candidates}). Les quantités viennent des attributs du gabarit : \texttt{VCPU},
+\texttt{MEMORY\_MB} et \texttt{DISK\_GB} (racine, éphémère et swap ; pour une instance démarrée sur un volume,
+le disque racine n'est pas compté). Les propriétés \texttt{resources:} et \texttt{trait:} du gabarit s'y ajoutent
+\parencite{nova-flavors}. Les paramètres principaux sont décrits dans le tableau~\ref{tab:pl-requete}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{4.2cm}>{\raggedright\arraybackslash}p{6.2cm}>{\raggedright\arraybackslash}p{5.1cm}@{}}
+\toprule
+\textrm{\textbf{Paramètre}} & \textbf{Effet} & \textbf{Propriété du gabarit} \\
+\midrule
+resources=\allowbreak VCPU:4,\allowbreak DISK\_GB:64 & Quantités minimales demandées. & \texttt{resources:CLASSE=N} \\
+required=T1,T2 & Traits exigés ; \texttt{!T} interdit un trait, \texttt{in:} accepte l'un d'eux. & \texttt{trait:T=required} ou \texttt{forbidden} \\
+member\_of=UUID & Fournisseur dans un agrégat (ou \texttt{in:}, ou \texttt{!}). & Zone de disponibilité demandée \\
+resourcesN, group\_policy & Plusieurs groupes de demandes, sur un même fournisseur ou non. & \texttt{resourcesN:}, \texttt{group\_policy=isolate|none} \\
+\bottomrule
+\end{tabular}
+\caption{Paramètres d'une requête de candidats \parencite{placement-api-ref}.}
+\label{tab:pl-requete}
+\end{table}
+
+La réponse contient deux listes : les \emph{allocation requests} (où et combien allouer pour chaque candidat)
+et les \emph{provider summaries} (capacité et usage des fournisseurs concernés). La figure~\ref{fig:pl-requete}
+déroule un exemple : seuls les fournisseurs qui ont assez de ressources et le trait demandé sont candidats.
+L'ordonnanceur de Nova trie ensuite ces candidats avec ses filtres et pondérateurs.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=15.2cm, text width=15.0cm] (rq) at (7.6,5.6)
+    {Requête : \texttt{VCPU 2, MEMORY\_MB 4096, DISK\_GB 20}, trait \texttt{HW\_CPU\_X86\_AVX2} exigé};
+  \foreach \x/\t in {2.0/{Fournisseur}, 6.0/{Ressources suffisantes ?}, 10.0/{Trait AVX2 ?}, 13.6/{Résultat}} {
+    \node[font=\scriptsize\bfseries, text=insagris] at (\x,4.6) {\t};
+  }
+  \foreach \y/\n/\r/\tr/\res/\sty in {3.8/compute1/oui/oui/candidat/pfoc, 3.0/compute2/oui/non/écarté/pgris,
+                                    2.2/compute3/{non (2\,Go libres)}/oui/écarté/pgris, 1.4/compute4/oui/oui/candidat/pfoc} {
+    \node[psvc, minimum width=2.4cm, font=\scriptsize\bfseries] at (2.0,\y) {\n};
+    \node[font=\footnotesize] at (6.0,\y) {\r};
+    \node[font=\footnotesize] at (10.0,\y) {\tr};
+    \node[\sty, minimum width=2.4cm, font=\scriptsize\bfseries] at (13.6,\y) {\res};
+  }
+  \draw[insagris!50] (0.3,4.2) -- (15.0,4.2);
+  \node[callout, minimum width=15.2cm] at (7.6,0.1)
+    {Les candidats (compute1 et compute4) passent ensuite aux filtres et pondérateurs de Nova.};
+\end{tikzpicture}}
+\caption{De la requête aux candidats. Chaque critère de la requête élimine des fournisseurs ; ce qui reste forme
+la liste de candidats.}
+\label{fig:pl-requete}
+\end{figure}
+
+On peut faire la même requête à la main avec le client \texttt{osc-placement}, ce qui aide à comprendre pourquoi
+Nova ne trouve pas d'hôte \parencite{osc-placement} :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack allocation candidate list \
+      --resource VCPU=2 --resource MEMORY_MB=4096 --resource DISK_GB=20 \
+      --required HW_CPU_X86_AVX2
+\end{lstlisting}
+\end{minipage}\par
+
+\paragraph{Ressources personnalisées.} Une classe \texttt{CUSTOM\_} permet de suivre des objets indivisibles.
+Pour un serveur physique géré par Ironic, un gabarit peut demander une unité de classe personnalisée et mettre à
+zéro les classes standard, afin que Placement ne compte que cette unité :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack flavor set bm.gold \
+      --property resources:CUSTOM_BAREMETAL_GOLD=1 \
+      --property resources:VCPU=0 --property resources:MEMORY_MB=0 \
+      --property resources:DISK_GB=0
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Allocations et accès concurrents}\label{sec:pl-concurrence}
+% ---------------------------------------------------------------------
+
+Une fois l'hôte retenu, l'ordonnanceur crée l'allocation de l'instance
+(\texttt{PUT /allocations/\{UUID de l'instance\}}) : c'est la \gls{claim}. Plusieurs ordonnanceurs peuvent lire
+les mêmes candidats en même temps ; Placement arbitre donc au moment de la réservation. Chaque fournisseur et
+chaque consommateur porte un numéro de \emph{génération} qui change à chaque modification. Une requête qui
+modifie un objet depuis une lecture périmée reçoit \texttt{409 Conflict} (code \texttt{placement.concurrent\_update}) :
+le client relit l'objet et recommence \parencite{placement-api-ref}. Le suivi de génération du consommateur existe
+depuis la microversion 1.28.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=0.9\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.8cm, fill=insapeche, draw=insaorange] (a) at (0,0) {Ordonnanceur A};
+  \node[acteur, minimum width=2.8cm, fill=insarouge, text=white, draw=black] (p) at (5.2,0) {Placement};
+  \node[acteur, minimum width=2.8cm, fill=insapeche, draw=insaorange] (b) at (10.4,0) {Ordonnanceur B};
+  \foreach \n in {a,p,b} \draw[vie] (\n.south) -- ++(0,-7.2);
+  \seqmsg{0}{5.2}{-1.2}{1}{candidats ?}
+  \seqmsg{10.4}{5.2}{-1.2}{2}{candidats ?}
+  \seqrep{5.2}{0}{-2.1}{}{compute1, compute4}
+  \seqrep{5.2}{10.4}{-2.1}{}{compute1, compute4}
+  \seqmsg{0}{5.2}{-3.1}{3}{réserver sur compute1}
+  \seqrep{5.2}{0}{-3.9}{}{accepté}
+  \seqmsg{10.4}{5.2}{-4.8}{4}{réserver sur compute1}
+  \seqrep{5.2}{10.4}{-5.6}{}{\texttt{409 Conflict}}
+  \seqmsg{10.4}{5.2}{-6.5}{5}{réserver sur compute4}
+  \seqrep{5.2}{10.4}{-7.3}{}{accepté}
+\end{tikzpicture}}
+\caption{Deux ordonnanceurs, une seule place libre sur \texttt{compute1}. A réserve le premier ; la réservation de
+B échoue, il essaie le candidat suivant.}
+\label{fig:pl-course}
+\end{figure}
+
+Les allocations s'inscrivent dans la vie de l'instance : créées à la réservation, modifiées par un
+redimensionnement, libérées à la suppression. Pendant une migration, Nova garde les ressources de l'hôte d'origine
+au nom de la migration, pour qu'elles restent comptées jusqu'à la confirmation.
+
+% ---------------------------------------------------------------------
+\subsection{Traits et agrégats}\label{sec:pl-traits}
+% ---------------------------------------------------------------------
+
+Les \glspl{trait} servent à dire ce qu'un fournisseur \emph{est}, quand les classes de ressources disent ce qu'il
+\emph{a}. Nova les utilise pour ses propres besoins : un nœud dont le service est désactivé reçoit le trait
+\texttt{COMPUTE\_STATUS\_DISABLED}, et un préfiltre obligatoire l'écarte \parencite{nova-scheduling}. L'administrateur
+peut en ajouter pour décrire son matériel.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack --os-placement-api-version 1.6 trait list
+$ openstack --os-placement-api-version 1.6 trait create CUSTOM_GPU_A100
+$ openstack --os-placement-api-version 1.6 resource provider trait list UUID
+\end{lstlisting}
+\end{minipage}\par
+
+La commande \texttt{resource provider trait set} \emph{remplace} l'ensemble des traits du fournisseur : on relit
+d'abord la liste, puis on la renvoie complétée.
+
+Les agrégats de Placement regroupent des fournisseurs, sans notion de service Nova ; ils servent à décrire un
+stockage partagé, une affinité ou une zone de disponibilité. Nova s'en sert pour traduire une zone demandée par
+l'utilisateur en condition \texttt{member\_of} \parencite{nova-scheduling,placement-api-ref}. Les fournisseurs
+imbriqués, enfin, permettent de décrire un nœud avec des sous-ressources (cartes réseau, accélérateurs) gérées par
+d'autres projets.
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre et diagnostic}\label{sec:pl-deploiement}
+% ---------------------------------------------------------------------
+
+Placement est une application web (WSGI) servie par Apache sur le port 8778, avec sa propre base de données.
+L'installation reprend le schéma des autres services \parencite{placement-install} : une base \texttt{placement},
+un utilisateur et un service de type \texttt{placement} dans Keystone (trois endpoints, port 8778), le paquet
+\texttt{placement-api}, puis la configuration.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/placement/placement.conf (extrait)
+[placement_database]
+connection = mysql+pymysql://placement:PLACEMENT_DBPASS@controller/placement
+[api]
+auth_strategy = keystone
+[keystone_authtoken]
+auth_url = http://controller:5000/v3
+auth_type = password
+username = placement
+password = PLACEMENT_PASS
+\end{lstlisting}
+\end{minipage}\par
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# su -s /bin/sh -c "placement-manage db sync" placement
+# systemctl restart apache2
+$ placement-status upgrade check
+\end{lstlisting}
+\end{minipage}\par
+
+Les commandes suivantes (client \texttt{osc-placement}) permettent d'inspecter l'état d'un nœud ou d'une
+instance, la première chose à faire quand l'ordonnanceur ne trouve pas d'hôte :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack resource provider list
+$ openstack resource provider inventory list PROVIDER_UUID
+$ openstack resource provider usage show PROVIDER_UUID
+$ openstack resource provider allocation show INSTANCE_UUID
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+\texttt{No valid host was found} & Pas de candidat : ressources insuffisantes ou trait absent. & \texttt{allocation candidate list} avec les mêmes paramètres \\
+Un nœud n'apparaît pas & \texttt{nova-compute} n'a pas publié son inventaire. & \texttt{resource provider list} ; journal de \texttt{nova-compute} \\
+Capacité surprenante & Ratio ou réserve inattendus. & \texttt{resource provider inventory list} \\
+Usage trop élevé & Allocations d'instances disparues. & \texttt{resource provider allocation show} par instance \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Placement.}
+\label{tab:pl-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:pl-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Calculer une capacité}\label{ex:pl-capacite}
+Un nœud a 16 cœurs (ratio 4, rien de réservé) et 65\,536\,Mo de mémoire (512 réservés, ratio 1). Ses allocations
+cumulent 40 vCPU et 50\,000\,Mo. Combien d'instances de 2 vCPU et 4\,096\,Mo peut-on encore y placer ?
+\end{exercice}
+\begin{correction}
+Capacité en vCPU : $16\times4=64$, donc 24 vCPU libres, soit 12 instances. Capacité en mémoire :
+$(65\,536-512)\times1=65\,024$\,Mo, donc 15\,024\,Mo libres, soit $\lfloor15\,024/4\,096\rfloor=3$ instances. La
+mémoire est le facteur limitant : \textbf{3 instances}.
+\end{correction}
+
+\begin{exercice}{Écrire une requête}\label{ex:pl-requete}
+Un gabarit demande 4 vCPU, 8\,192\,Mo de mémoire et 40\,Go de disque, sur des processeurs avec AVX2. Écrire la
+requête de candidats (forme HTTP) et la commande \texttt{osc-placement} équivalente. Comment obtenir le même
+effet avec les propriétés du gabarit ?
+\end{exercice}
+\begin{correction}
+Forme HTTP : \texttt{GET /allocation\_\allowbreak candidates?\allowbreak resources=VCPU:4,\allowbreak MEMORY\_MB:8192,\allowbreak DISK\_GB:40\&\allowbreak required=\allowbreak HW\_CPU\_X86\_AVX2}.
+Client : \texttt{openstack allocation candidate list --resource VCPU=4 --resource MEMORY\_MB=8192 --resource DISK\_GB=40 --required HW\_CPU\_X86\_AVX2}. Côté gabarit, les quantités viennent de ses attributs (vCPU, mémoire, disque) et le trait
+s'ajoute par \texttt{openstack flavor set --property trait:HW\_CPU\_X86\_AVX2=required}.
+\end{correction}
+
+\begin{exercice}{Réservation concurrente}\label{ex:pl-concurrence}
+Deux ordonnanceurs retiennent \texttt{compute1}, qui n'a de place que pour une instance. Que se passe-t-il, et pourquoi
+Placement est-il le bon endroit pour trancher ? Une instance supprimée laisse-t-elle des ressources comptées ?
+\end{exercice}
+\begin{correction}
+La première réservation est acceptée ; la seconde échoue (\texttt{409 Conflict}) parce que la capacité ou la génération a
+changé : l'ordonnanceur passe au candidat suivant. Placement tranche car il est le seul à voir toutes les allocations,
+et il vérifie la capacité au moment de l'écriture. À la suppression, l'allocation de l'instance est libérée ; si l'usage
+reste trop élevé, c'est que des allocations de consommateurs disparus subsistent, à chercher avec
+\texttt{resource provider allocation show} (ou, côté Nova, \texttt{nova-manage placement audit}).
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:pl-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Placement tient, pour chaque fournisseur, des inventaires (ce qu'il offre), des traits (ce qu'il est) et des
+        allocations (ce qui est pris). Il répond aux requêtes de candidats ; il ne choisit pas l'hôte.
+  \item La capacité d'une classe vaut $(\texttt{total}-\texttt{reserved})\times\texttt{allocation\_ratio}$ ; une allocation
+        est acceptée tant que $\text{utilisé}+\text{demandé}\le\text{capacité}$.
+  \item Placement compte les allocations et non la consommation réelle ; le ratio d'allocation règle la surallocation.
+  \item \texttt{nova-compute} publie l'inventaire de son nœud ; \texttt{nova-scheduler} lit les candidats puis réserve
+        (\emph{claim}) par une allocation au nom de l'instance.
+  \item Le gabarit se traduit en requête : \texttt{resources:} pour les quantités, \texttt{trait:} pour les exigences
+        qualitatives.
+  \item Les générations de fournisseur et de consommateur protègent contre les accès concurrents : un conflit
+        (\texttt{409}) impose de relire et de recommencer.
+  \item Les classes \texttt{CUSTOM\_} et les traits personnalisés permettent de suivre des ressources particulières
+        (serveurs physiques, GPU).
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.0cm}>{\raggedright\arraybackslash}p{10.1cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Lister les fournisseurs & \texttt{openstack resource provider list} & \ref{sec:pl-deploiement} \\
+Voir l'inventaire & \texttt{openstack resource provider inventory list UUID} & \ref{sec:pl-inventaire} \\
+Voir l'usage & \texttt{openstack resource provider usage show UUID} & \ref{sec:pl-inventaire} \\
+Simuler une requête & \texttt{openstack allocation candidate list --resource VCPU=2 --required T} & \ref{sec:pl-requetes} \\
+Voir les allocations d'une instance & \texttt{openstack resource provider allocation show UUID} & \ref{sec:pl-concurrence} \\
+Gérer les traits & \texttt{openstack trait create}, \texttt{resource provider trait list} & \ref{sec:pl-traits} \\
+Initialiser Placement & \texttt{placement-manage db sync} & \ref{sec:pl-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Calculer la capacité et le nombre d'instances encore possibles à partir d'un inventaire
+        (exercice~\ref{ex:pl-capacite}).
+  \item Écrire une requête de candidats à partir d'un gabarit (exercice~\ref{ex:pl-requete}).
+  \item Expliquer une réservation concurrente et chercher des allocations orphelines
+        (exercice~\ref{ex:pl-concurrence}).
+\end{itemize}
+\end{savoirfaire}

@@ -2,10 +2,543 @@
 %  Chapitre « Nova : le service de calcul »
 %  Fichier importé par main.tex avec \include{chap_nova}.
 %  Il ne contient ni préambule ni \begin{document} : les environnements
-%  (definition, resultat, remarque, aretenir, savoirfaire, exercice, correction),
-%  les styles TikZ (svc, svcgris, bus, flux) et les couleurs (insarouge,
-%  insagris) sont définis dans main.tex. Un chapitre = une \section.
-%  Contenu à rédiger.
+%  (definition, resultat, remarque, pointcle, aretenir, savoirfaire, exercice,
+%  correction), les styles TikZ (pcli, pfoc, psvc, pdat, pgris, fluxo, fluxr,
+%  fluxd, etiqf, callout, num, acteur, vie, msg, rep) et les couleurs (insarouge,
+%  insagris, insaorange, insapeche) sont définis dans main.tex. Un chapitre = une \section.
+%  Sources : support « Introduction à OpenStack » (partie 5), documentation
+%  officielle de Nova (voir sources.bib). Chapitre synthétique : 10 pages au plus.
 % =====================================================================
 
+% =====================================================================
 \section{Nova : le service de calcul}\label{chap:nova}
+% =====================================================================
+
+Nova crée et gère les machines virtuelles d'OpenStack. Ce chapitre situe Nova parmi les autres services,
+présente ses concepts (instance, gabarit, nœud de calcul) et ses composants, puis suit la création d'une
+instance, de la requête au démarrage de la machine. Il explique ensuite le choix de l'hôte par
+l'ordonnanceur, le cycle de vie d'une instance et la mise en œuvre. Placement, qui tient l'inventaire des
+ressources, a son propre chapitre (chapitre~\ref{chap:placement}).
+
+% ---------------------------------------------------------------------
+\subsection{Rôle et place de Nova}\label{sec:nova-role}
+% ---------------------------------------------------------------------
+
+\begin{definition}{Nova}
+Nova est le service de calcul d'OpenStack (projet \emph{Compute}). Il gère le cycle de vie complet des
+\glspl{instance} : création, arrêt, redimensionnement, migration, suppression. Il ne fait pas tourner les
+machines lui-même : il pilote un \gls{hyperviseur} (KVM/QEMU le plus souvent) installé sur chaque
+\gls{noeudcalcul}.
+\end{definition}
+
+\begin{itemize}
+  \item \textbf{Problème.} Créer à la demande des machines virtuelles de la bonne taille, sur un serveur qui
+        a assez de ressources, sans que l'utilisateur sache où elles tournent.
+  \item \textbf{Communique avec.} Keystone (authentification), Placement (inventaire et choix de l'hôte),
+        Glance (image), Neutron (réseau), Cinder (volumes), et l'hyperviseur par \gls{libvirt}.
+  \item \textbf{Exemple.} \texttt{openstack server create --flavor m1.small --image ubuntu --network private
+        vm1} : cette commande appelle l'API REST de Nova, qui crée l'instance \texttt{vm1}.
+\end{itemize}
+
+La figure~\ref{fig:nova-env} montre les services avec lesquels Nova échange. Nova valide d'abord le
+token auprès de Keystone, demande à Placement où placer l'instance, puis son composant \texttt{nova-compute}
+récupère l'image, le réseau et les volumes avant de démarrer la machine.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=6.4cm] (cli) at (6.4,6.6) {CLI \ $\cdot$ \ Horizon \ $\cdot$ \ API REST};
+  \node[pfoc, minimum width=3.6cm, minimum height=1.3cm] (nova) at (6.4,3.7)
+    {Nova\\ {\scriptsize\mdseries instances}};
+  \node[psvc, minimum width=2.6cm] (ks) at (0.9,3.7) {Keystone};
+  \node[psvc, minimum width=2.6cm] (pl) at (0.9,1.3) {Placement};
+  \node[psvc, minimum width=2.6cm] (gl) at (11.9,5.6) {Glance};
+  \node[psvc, minimum width=2.6cm] (ne) at (11.9,3.7) {Neutron};
+  \node[psvc, minimum width=2.6cm] (ci) at (11.9,1.8) {Cinder};
+  \node[pgris, minimum width=9.2cm] (hyp) at (6.4,0.3)
+    {Hyperviseur KVM/QEMU, piloté par libvirt, sur chaque nœud de calcul};
+  \draw[fluxr] (cli) -- (nova)
+    node[num, pos=0.3] {1} node[etiqf, midway, right=5mm, text width=2.6cm] {\texttt{POST /v2.1/servers} + token};
+  \draw[fluxo] (nova.west) -- (ks.east)
+    node[num, pos=0.15, above=3pt] {2} node[etiqf, midway, below=2pt] {valide le token};
+  \draw[fluxo] (nova.south west) -- (pl.east)
+    node[num, pos=0.15, above=3pt] {3} node[etiqf, midway, above=2pt] {où placer ?};
+  \draw[fluxo] (nova.north east) -- (gl.west) node[etiqf, near end, above=1pt] {image};
+  \draw[fluxo] (nova.east) -- (ne.west)
+    node[num, pos=0.15, above=3pt] {4} node[etiqf, midway, below=1pt] {ports};
+  \draw[fluxo] (nova.south east) -- (ci.west) node[etiqf, near end, below=1pt] {volumes};
+  \draw[fluxr] (nova.south) -- (hyp.north)
+    node[num, pos=0.45] {5} node[etiqf, midway, right=5mm] {démarre la VM};
+  \node[callout, minimum width=13.2cm] at (6.4,-0.9)
+    {Nova n'exécute aucune machine virtuelle lui-même : il pilote l'hyperviseur et s'appuie sur les autres services.};
+\end{tikzpicture}}
+\caption{Nova et les services qu'il sollicite. La requête de l'utilisateur est authentifiée (1, 2). Nova obtient
+l'hôte de Placement (3), puis son composant de calcul appelle Glance, Neutron et Cinder (4) et démarre la
+machine par libvirt (5).}
+\label{fig:nova-env}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Concepts fondamentaux}\label{sec:nova-concepts}
+% ---------------------------------------------------------------------
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.3cm}>{\raggedright\arraybackslash}p{8.0cm}>{\raggedright\arraybackslash\ttfamily}p{4.0cm}@{}}
+\toprule
+\textbf{Objet} & \textbf{Définition} & \textrm{\textbf{Commande}} \\
+\midrule
+\Gls{instance} & Machine virtuelle en cours d'existence ; Nova l'appelle un \emph{server}. & openstack server create \\
+\Gls{flavor} & Taille de l'instance : vCPU, mémoire, disque racine, disque éphémère, swap. & openstack flavor create \\
+Image & Modèle de disque fourni par Glance, à partir duquel l'instance démarre. & openstack image list \\
+Paire de clés & Clé publique SSH injectée dans l'instance au démarrage. & openstack keypair create \\
+Groupe de serveurs & Règle de placement entre instances : affinité ou anti-affinité. & openstack server group create \\
+\Gls{agregat} & Groupe de nœuds de calcul défini par l'administrateur, avec des métadonnées. & openstack aggregate create \\
+\Gls{zonedispo} & Agrégat que l'utilisateur peut viser à la création. & --availability-zone \\
+\bottomrule
+\end{tabular}
+\caption{Les objets de Nova \parencite{nova-flavors,nova-scheduling}.}
+\label{tab:nova-objets}
+\end{table}
+
+Un \gls{flavor} comporte un nom, un nombre de vCPU, une taille de mémoire, un disque racine, et des
+options : disque éphémère (perdu à la suppression de l'instance), swap, visibilité publique ou limitée à des
+projets. Un disque racine de taille \texttt{0} prend la taille native de l'image \parencite{nova-flavors}.
+Des propriétés supplémentaires (\emph{extra specs}) affinent la demande. Celles qui commencent par
+\texttt{resources:} et \texttt{trait:} sont traduites en requête vers Placement (chapitre~\ref{chap:placement}) ;
+d'autres, comme \texttt{hw:cpu\_policy}, s'adressent à l'hyperviseur.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack flavor create --vcpus 2 --ram 4096 --disk 20 m1.custom
+$ openstack flavor set m1.custom --property trait:HW_CPU_X86_AVX2=required
+$ openstack flavor show m1.custom
+\end{lstlisting}
+\end{minipage}\par
+
+L'API de Nova est versionnée par \glspl{microversion} : la version de base est \texttt{v2.1} (d'où l'endpoint
+\texttt{http://controller:8774/v2.1}), et chaque fonctionnalité ajoutée a son numéro, que le client demande
+(option \texttt{--os-compute-api-version}).
+
+% ---------------------------------------------------------------------
+\subsection{Architecture : composants et cellules}\label{sec:nova-archi}
+% ---------------------------------------------------------------------
+
+Nova n'est pas un programme unique mais un ensemble de services qui communiquent par une \gls{apirest}
+vers l'extérieur et par un \gls{busmessages} (RabbitMQ) vers l'intérieur \parencite{nova-architecture}. Le
+tableau~\ref{tab:nova-composants} les décrit et la figure~\ref{fig:nova-archi} montre leur place.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{3.5cm}>{\raggedright\arraybackslash}p{9.0cm}>{\raggedright\arraybackslash}p{3.0cm}@{}}
+\toprule
+\textrm{\textbf{Composant}} & \textbf{Rôle} & \textbf{Niveau} \\
+\midrule
+nova-api & Reçoit les requêtes HTTP, vérifie le token et les quotas, expose aussi l'API de métadonnées. & API \\
+nova-scheduler & Choisit l'hôte, en interrogeant Placement. & API \\
+nova-conductor & Coordonne les opérations qui engagent plusieurs composants (construction, redimensionnement) et sert d'intermédiaire avec la base de données. & API (super) et cellule \\
+nova-compute & Dialogue avec l'hyperviseur pour créer, arrêter, migrer les machines. & Cellule \\
+nova-novncproxy & Relaie la console graphique de l'instance vers le navigateur. & API \\
+\bottomrule
+\end{tabular}
+\caption{Les composants de Nova.}
+\label{tab:nova-composants}
+\end{table}
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \draw[insaorange, thick, rounded corners=6pt, fill=insapeche!30] (0.2,3.9) rectangle (11.4,8.2);
+  \node[anchor=north west, font=\scriptsize\bfseries, text=insaorange] at (0.35,8.1) {Plan de contrôle (contrôleur)};
+  \node[psvc, minimum width=2.5cm] (api) at (2.2,6.7) {nova-api};
+  \node[psvc, minimum width=2.5cm] (cond) at (5.7,6.7) {nova-conductor};
+  \node[psvc, minimum width=2.5cm] (sch) at (9.2,6.7) {nova-scheduler};
+  \node[psvc, minimum width=2.5cm] (vnc) at (2.2,4.7) {nova-novncproxy};
+  \node[pdat, minimum width=3.6cm, font=\scriptsize\bfseries] (db) at (5.7,4.7) {Bases SQL\\ {\scriptsize\mdseries \texttt{nova\_api}, \texttt{nova}, \texttt{nova\_cell0}}};
+  \node[font=\scriptsize\itshape, text=insagris, text width=2.6cm, align=center] at (9.6,4.7)
+    {les nœuds de calcul n'ont pas d'accès direct à la base};
+  \draw[<->, thick, insagris] (cond) -- (db);
+  \node[psvc, minimum width=2.8cm, minimum height=1.2cm] (pl) at (13.6,6.7) {Placement};
+  \draw[fluxo] (sch.east) -- (pl.west) node[etiqf, midway, above=1pt, text width=1.9cm] {candidats, réservations};
+  \node[pgris, minimum width=14.6cm, font=\scriptsize\bfseries] (bus) at (7.5,2.8)
+    {Bus de messages (RabbitMQ) : appels distants (RPC) entre composants};
+  \draw[<->, thick, insagris] (5.7,3.9) -- (5.7,3.1);
+  \foreach \x/\n in {2.4/1, 7.5/2, 12.6/3} {
+    \node[psvc, minimum width=4.4cm, minimum height=1.1cm, font=\scriptsize\bfseries] (c\n) at (\x,0.8)
+      {Nœud de calcul \n\\ {\scriptsize\mdseries nova-compute + libvirt/KVM}};
+    \draw[<->, thick, insagris] (\x,1.35) -- (\x,2.5);
+  }
+  \draw[fluxo] (13.9,1.35) -- (13.9,6.1)
+    node[etiqf, pos=0.35, right=2pt, text width=1.7cm] {inventaire et usage};
+  \node[callout, minimum width=14.6cm] at (7.5,-1.0)
+    {nova-api et nova-scheduler vivent au niveau global ; nova-compute et son conductor vivent dans une cellule.};
+\end{tikzpicture}}
+\caption{Architecture de Nova. Les composants du plan de contrôle et les nœuds de calcul échangent par le bus de
+messages. Seuls les services du plan de contrôle touchent aux bases ; \texttt{nova-compute} y passe par le
+conductor, et publie ses ressources dans Placement.}
+\label{fig:nova-archi}
+\end{figure}
+
+\paragraph{Cellules (cells v2).} Pour passer à l'échelle, Nova répartit les nœuds de calcul en
+\glspl{cellule}. Chaque cellule a sa propre base de données et sa propre file de messages ; le niveau API,
+unique, conserve dans la base \texttt{nova\_api} la correspondance entre chaque instance et sa cellule
+(figure~\ref{fig:nova-cells}). La cellule \texttt{cell0} est une base spéciale, sans nœud de calcul, qui garde les
+instances que l'ordonnanceur n'a pas pu placer. Tout déploiement comporte au moins une cellule
+\parencite{nova-cells}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pfoc, minimum width=5.4cm, minimum height=1.4cm] (g) at (2.8,2.4)
+    {Niveau API\\ {\scriptsize\mdseries nova-api, scheduler, super conductor}};
+  \node[pdat, minimum width=3.6cm, font=\scriptsize\bfseries] (ga) at (2.8,0.3) {Base \texttt{nova\_api}\\ instance $\to$ cellule};
+  \draw[<->, thick, insagris] (g) -- (ga);
+  \foreach \y/\n/\t in {3.4/{Cellule 1}/{conductor, base, file de messages, nœuds de calcul},
+                        1.4/{Cellule 2}/{conductor, base, file de messages, nœuds de calcul},
+                        -0.6/{cell0}/{base des instances non placées, aucun nœud}} {
+    \node[psvc, minimum width=7.2cm, minimum height=1.4cm, text width=6.8cm] (cl) at (11.4,\y)
+      {\textbf{\n}\\ {\scriptsize\mdseries \t}};
+    \draw[fluxo] (g.east) to[out=0,in=180] (cl.west);
+  }
+  \node[callout, minimum width=13.6cm] at (7.0,-2.3)
+    {Une instance est repérée par un triplet : base de données, file de messages, nom d'hôte.};
+\end{tikzpicture}}
+\caption{Nova en cellules. Le niveau API route chaque requête vers la base et la file de la cellule qui héberge
+l'instance.}
+\label{fig:nova-cells}
+\end{figure}
+
+% ---------------------------------------------------------------------
+\subsection{Création d'une instance}\label{sec:nova-creation}
+% ---------------------------------------------------------------------
+
+La figure~\ref{fig:nova-seq} suit \texttt{openstack server create}. L'API répond tôt (étape~3), avant que la
+machine existe : la construction est asynchrone, et l'instance reste à l'état \texttt{BUILD} tant que le
+nœud de calcul n'a pas fini \parencite{nova-scheduling-ref}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[acteur, minimum width=2.4cm] (c) at (0.8,0)  {Client};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (a) at (4.0,0)  {nova-api};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (o) at (7.2,0)  {nova-\\conductor};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (s) at (10.4,0) {nova-\\scheduler};
+  \node[acteur, minimum width=2.4cm, fill=insapeche, draw=insaorange] (p) at (13.6,0) {Placement};
+  \node[acteur, minimum width=2.4cm, fill=insarouge, text=white, draw=black] (m) at (16.8,0) {nova-\\compute};
+  \foreach \n in {c,a,o,s,p,m} \draw[vie] (\n.south) -- ++(0,-9.3);
+  \seqmsg{0.8}{4.0}{-1.3}{1}{\texttt{POST /servers}}
+  \seqmsg{4.0}{7.2}{-2.2}{2}{demande de\\ construction}
+  \seqrep{4.0}{0.8}{-3.0}{3}{\texttt{202 Accepted}}
+  \seqmsg{7.2}{10.4}{-3.9}{4}{choisir un hôte}
+  \seqmsg{10.4}{13.6}{-4.8}{5}{quels hôtes ?}
+  \seqrep{13.6}{10.4}{-5.6}{}{candidats}
+  \node[callout, font=\scriptsize] at (10.4,-6.3) {filtres, poids};
+  \seqmsg{10.4}{13.6}{-7.0}{6}{réserve (claim)}
+  \seqrep{10.4}{7.2}{-7.9}{7}{hôte + hôtes de repli}
+  \seqmsg{7.2}{16.8}{-8.8}{8}{construire l'instance (RPC)}
+  \node[callout, font=\scriptsize, text width=3.4cm] at (15.0,-9.9)
+    {image, port réseau, volumes ; démarrage par libvirt};
+  \seqrep{16.8}{7.2}{-10.9}{9}{instance \texttt{ACTIVE}}
+\end{tikzpicture}}
+\caption{Création d'une instance. L'API valide la requête, les quotas et le token puis rend la main (1 à 3).
+Le conductor demande un hôte à l'ordonnanceur (4), qui interroge Placement, filtre, pondère et réserve les
+ressources (5, 6). Le conductor envoie alors la construction au nœud de calcul de la cellule (7, 8), qui
+obtient l'image, le réseau et les volumes puis démarre la machine (9).}
+\label{fig:nova-seq}
+\end{figure}
+
+Sur le nœud de calcul, \texttt{nova-compute} enchaîne trois demandes avant de lancer la machine : l'image chez
+Glance (qu'il télécharge ou référence), un port réseau chez Neutron (créé et lié à l'hôte), et le cas échéant
+l'attachement des volumes Cinder. Il appelle ensuite \gls{libvirt}, qui démarre le guest. Si la construction échoue
+sur ce nœud, le conductor essaie un hôte de repli, puis l'instance passe à l'état \texttt{ERROR}.
+
+% ---------------------------------------------------------------------
+\subsection{Ordonnancement : choisir l'hôte}\label{sec:nova-ordonnancement}
+% ---------------------------------------------------------------------
+
+L'\gls{ordonnanceur} travaille en deux temps, résumés par la figure~\ref{fig:nova-sched}. Placement renvoie
+d'abord les hôtes qui ont assez de ressources pour la demande ; l'ordonnanceur applique ensuite ses
+\emph{filtres} (accepter ou rejeter chaque hôte) puis ses \emph{pondérateurs} (noter ceux qui restent),
+retient le mieux classé et réserve ses ressources dans Placement \parencite{nova-scheduling-ref}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize]
+  \node[pcli, minimum width=2.6cm, text width=2.4cm] (rq) at (0,0) {Requête\\ {\scriptsize\mdseries gabarit, image, indices}};
+  \node[psvc, minimum width=2.6cm, text width=2.4cm] (pl) at (4.2,0) {Placement\\ {\scriptsize\mdseries ressources, traits}};
+  \node[pgris, minimum width=2.6cm, text width=2.4cm] (fi) at (8.4,0) {Filtres\\ {\scriptsize\mdseries accepter ou rejeter}};
+  \node[pgris, minimum width=2.6cm, text width=2.4cm] (po) at (12.6,0) {Pondérateurs\\ {\scriptsize\mdseries noter les hôtes}};
+  \node[pfoc, minimum width=2.4cm, text width=2.2cm] (cl) at (16.8,0) {Réservation\\ {\scriptsize\mdseries claim}};
+  \foreach \a/\b/\n in {rq/pl/{}, pl/fi/{100 $\to$ 12}, fi/po/{12 $\to$ 4}, po/cl/{1}} {
+    \draw[fluxo] (\a) -- (\b) node[etiqf, midway, above=2pt] {\n};
+  }
+  \node[callout, minimum width=16.6cm] at (8.4,-1.6)
+    {Les nombres d'hôtes restants sont un exemple. Si la réservation échoue (ressources prises entre-temps), l'ordonnanceur essaie l'hôte suivant.};
+\end{tikzpicture}}
+\caption{Choix de l'hôte. Placement élimine d'emblée les hôtes sans ressources ; les filtres et pondérateurs de
+Nova traitent les critères que Placement ne connaît pas.}
+\label{fig:nova-sched}
+\end{figure}
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash\ttfamily}p{6.6cm}>{\raggedright\arraybackslash}p{8.9cm}@{}}
+\toprule
+\textrm{\textbf{Filtre ou pondérateur}} & \textbf{Effet} \\
+\midrule
+ComputeFilter & Ne garde que les hôtes en service et activés. \\
+ComputeCapabilitiesFilter & Compare les propriétés du gabarit aux capacités de l'hôte. \\
+ImagePropertiesFilter & Vérifie l'architecture, le type d'hyperviseur et le mode de VM demandés par l'image. \\
+ServerGroup\allowbreak(Anti)Affinity\allowbreak Filter & Regroupe (affinité) ou sépare (anti-affinité) les instances d'un groupe de serveurs. \\
+AggregateInstance\allowbreak ExtraSpecsFilter & Rapproche les propriétés du gabarit des métadonnées d'un agrégat. \\
+NUMATopologyFilter, PciPassthroughFilter & Exigent une topologie NUMA ou des périphériques PCI. \\
+RAMWeigher, CPUWeigher, DiskWeigher & Favorisent les hôtes qui ont le plus de mémoire, de vCPU, de disque libres ; pondération par les options \texttt{[filter\_scheduler] *\_weight\_multiplier}. \\
+\bottomrule
+\end{tabular}
+\caption{Quelques filtres et pondérateurs \parencite{nova-scheduling}. Les filtres actifs se choisissent dans \texttt{[filter\_scheduler] enabled\_filters}.}
+\label{tab:nova-filtres}
+\end{table}
+
+Plusieurs mécanismes orientent le choix. Les \emph{indices d'ordonnancement} (\texttt{--hint}) permettent de
+demander \texttt{different\_host}, \texttt{same\_host} ou l'appartenance à un groupe de serveurs. Un
+\gls{zonedispo} demandée à la création est traduite en agrégat Placement. L'option
+\texttt{[filter\_scheduler] host\_subset\_size} fait tirer au hasard l'hôte final parmi les mieux classés, pour
+éviter que des demandes simultanées visent le même.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack server group create --policy anti-affinity web
+$ openstack server create --flavor m1.small --image ubuntu --network private \
+      --hint group=GROUP_UUID web1
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Cycle de vie et opérations}\label{sec:nova-cycle}
+% ---------------------------------------------------------------------
+
+Une instance passe par des états que la figure~\ref{fig:nova-etats} résume (statuts affichés par
+\texttt{openstack server list}). Toute instance peut passer à \texttt{ERROR} ou être supprimée
+\parencite{nova-vm-states}.
+
+\begin{figure}[!ht]
+\centering
+\adjustbox{max width=0.95\linewidth}{%
+\begin{tikzpicture}[>=Stealth, font=\footnotesize,
+    etat/.style={pastille, psvc, minimum width=3.0cm, font=\scriptsize\bfseries}]
+  \node[pfoc, minimum width=2.8cm, minimum height=1.0cm] (ac) at (6.3,2.6) {ACTIVE};
+  \node[pcli, minimum width=2.4cm, font=\scriptsize\bfseries] (bu) at (6.3,5.2) {BUILD};
+  \node[etat] (sh) at (0.6,4.6) {SHUTOFF};
+  \node[etat] (pa) at (0.6,2.6) {PAUSED};
+  \node[etat] (su) at (0.6,0.6) {SUSPENDED};
+  \node[etat] (so) at (12.0,4.6) {SHELVED\_OFFLOADED};
+  \node[etat] (vr) at (12.0,2.6) {VERIFY\_RESIZE};
+  \node[etat] (re) at (12.0,0.6) {RESCUE};
+  \draw[fluxo] (bu) -- (ac) node[etiqf, midway, right=2pt] {création};
+  \draw[<->, thick, insaorange] (ac.north west) -- (sh.east) node[etiqf, midway, above=2pt] {stop / start};
+  \draw[<->, thick, insaorange] (ac.west) -- (pa.east) node[etiqf, midway, above=1pt] {pause / unpause};
+  \draw[<->, thick, insaorange] (ac.south west) -- (su.east) node[etiqf, midway, below=2pt] {suspend / resume};
+  \draw[<->, thick, insaorange] (ac.north east) -- (so.west) node[etiqf, midway, above=2pt] {shelve / unshelve};
+  \draw[<->, thick, insaorange] (ac.east) -- (vr.west) node[etiqf, midway, above=1pt] {resize / confirm};
+  \draw[<->, thick, insaorange] (ac.south east) -- (re.west) node[etiqf, midway, below=2pt] {rescue / unrescue};
+  \node[callout, minimum width=11.0cm] at (6.3,-0.7)
+    {Tous les états mènent à \texttt{ERROR} ou \texttt{DELETED} ; \texttt{reboot} laisse l'instance \texttt{ACTIVE}.};
+\end{tikzpicture}}
+\caption{États d'une instance Nova et actions qui les relient.}
+\label{fig:nova-etats}
+\end{figure}
+
+Quatre opérations déplacent ou recréent une instance ; elles diffèrent par l'interruption de service
+(tableau~\ref{tab:nova-deplacements}). La \gls{migrationchaud} demande un stockage partagé ou l'option
+\texttt{--block-migrate}, qui copie le disque pendant le transfert \parencite{nova-live-migration}.
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.4cm}>{\raggedright\arraybackslash}p{7.4cm}>{\raggedright\arraybackslash}p{4.7cm}@{}}
+\toprule
+\textbf{Opération} & \textbf{Effet} & \textbf{Interruption} \\
+\midrule
+Redimensionnement & Change de gabarit ; l'instance redémarre, éventuellement sur un autre hôte, puis on confirme ou on annule. & Oui, un redémarrage \\
+Migration à froid & Déplace l'instance sur un autre hôte, arrêtée puis redémarrée. & Oui \\
+Migration à chaud & Déplace l'instance en marche (par exemple pour vider un hôte avant maintenance). & Très courte \\
+Évacuation & Recrée une instance sur un autre hôte quand le sien est en panne. & Oui, hôte indisponible \\
+\bottomrule
+\end{tabular}
+\caption{Déplacer ou recréer une instance.}
+\label{tab:nova-deplacements}
+\end{table}
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack server migrate vm1 --live-migration --host compute2
+$ openstack server migration list --server vm1
+$ openstack server resize confirm vm1
+\end{lstlisting}
+\end{minipage}\par
+
+% ---------------------------------------------------------------------
+\subsection{Mise en œuvre}\label{sec:nova-deploiement}
+% ---------------------------------------------------------------------
+
+L'installation se fait en deux temps \parencite{nova-install-controller,nova-install-compute}. Sur le contrôleur,
+on crée trois bases (\texttt{nova\_api}, \texttt{nova}, \texttt{nova\_cell0}), l'utilisateur et le service
+\texttt{compute} dans Keystone (endpoints sur le port 8774) et l'on installe \texttt{nova-api}, \texttt{nova-conductor},
+\texttt{nova-novncproxy} et \texttt{nova-scheduler}. Le fichier \texttt{/etc/nova/nova.conf} renseigne les bases,
+le bus de messages, Keystone, Glance et Placement. On initialise ensuite les cellules :
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+# nova-manage api_db sync
+# nova-manage cell_v2 map_cell0
+# nova-manage cell_v2 create_cell --name=cell1 --verbose
+# nova-manage db sync
+# nova-manage cell_v2 list_cells
+\end{lstlisting}
+\end{minipage}\par
+
+Sur chaque nœud de calcul, on installe \texttt{nova-compute} et l'on choisit l'hyperviseur. La commande
+\texttt{egrep -c '(vmx|svm)' /proc/cpuinfo} indique si le processeur offre l'accélération matérielle : si le
+résultat est \texttt{0}, on utilise \texttt{virt\_type = qemu} au lieu de \texttt{kvm}.
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}
+# /etc/nova/nova.conf (nœud de calcul, extrait)
+[DEFAULT]
+transport_url = rabbit://openstack:RABBIT_PASS@controller
+my_ip = 10.0.0.31
+[vnc]
+enabled = true
+server_listen = 0.0.0.0
+server_proxyclient_address = $my_ip
+novncproxy_base_url = http://controller:6080/vnc_auto.html
+[libvirt]
+virt_type = kvm
+\end{lstlisting}
+\end{minipage}\par
+
+Le nœud est ensuite déclaré dans la cellule : il faut le « découvrir », à la main ou périodiquement
+(\texttt{[scheduler] discover\_hosts\_in\_cells\_interval = 300}).
+
+\par\noindent\begin{minipage}{\linewidth}
+\begin{lstlisting}[style=terminal]
+$ openstack compute service list --service nova-compute
+# nova-manage cell_v2 discover_hosts --verbose
+$ openstack hypervisor list
+\end{lstlisting}
+\end{minipage}\par
+
+\begin{table}[!ht]
+\centering
+\renewcommand{\arraystretch}{1.3}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}p{5.6cm}>{\raggedright\arraybackslash}p{5.3cm}@{}}
+\toprule
+\textbf{Symptôme} & \textbf{Cause probable} & \textbf{Vérification} \\
+\midrule
+\texttt{No valid host was found} & Aucun hôte ne passe Placement ou les filtres. & \texttt{openstack allocation candidate list} (chapitre~\ref{chap:placement}) ; journal du scheduler \\
+Nouveau nœud absent du choix & Hôte non découvert dans la cellule. & \texttt{nova-manage cell\_v2 discover\_hosts} \\
+Instance en \texttt{ERROR} après \texttt{BUILD} & Échec sur le nœud de calcul (image, réseau, volume). & \texttt{openstack server show} (champ \texttt{fault}) ; journal \texttt{nova-compute} \\
+Service \texttt{nova-compute} \texttt{down} & Processus arrêté ou bus injoignable. & \texttt{openstack compute service list} \\
+\bottomrule
+\end{tabular}
+\caption{Diagnostiquer un problème avec Nova.}
+\label{tab:nova-pannes}
+\end{table}
+
+% ---------------------------------------------------------------------
+\subsection{Exercices corrigés}\label{sec:nova-exercices}
+% ---------------------------------------------------------------------
+
+\begin{exercice}{Qui fait quoi ?}\label{ex:nova-roles}
+Pour chacune des actions suivantes, nommer le composant de Nova (ou le service) qui en est responsable :
+(a)~renvoyer \texttt{202 Accepted} ; (b)~noter les hôtes restants ; (c)~démarrer le guest ; (d)~écrire dans la base de
+la cellule pour le compte d'un nœud de calcul ; (e)~lister les hôtes qui ont assez de mémoire.
+\end{exercice}
+\begin{correction}
+(a)~\texttt{nova-api}. (b)~\texttt{nova-scheduler}, par ses pondérateurs. (c)~\texttt{nova-compute}, par libvirt et
+l'hyperviseur. (d)~\texttt{nova-conductor} : les nœuds de calcul n'accèdent pas à la base. (e)~Placement,
+interrogé par l'ordonnanceur (section~\ref{sec:nova-ordonnancement}).
+\end{correction}
+
+\begin{exercice}{Choisir l'hôte}\label{ex:nova-hote}
+Une instance demande 4~Go de mémoire, avec un groupe de serveurs en anti-affinité. Cinq hôtes sont candidats :
+\texttt{A} (désactivé, 40~Go libres), \texttt{B} (8~Go libres), \texttt{C} (32~Go libres, déjà un membre du groupe),
+\texttt{D} (16~Go libres), \texttt{E} (2~Go libres). L'ordonnanceur utilise \texttt{ComputeFilter},
+\texttt{ServerGroupAntiAffinityFilter} et \texttt{RAMWeigher}, avec \texttt{host\_subset\_size = 1}. Quel hôte est retenu ?
+\end{exercice}
+\begin{correction}
+\texttt{E} n'a pas assez de mémoire : Placement l'écarte. \texttt{A} est rejeté par \texttt{ComputeFilter} (hôte
+désactivé), \texttt{C} par l'anti-affinité (il héberge déjà un membre du groupe). Restent \texttt{B} (8~Go) et \texttt{D}
+(16~Go) : \texttt{RAMWeigher} favorise la mémoire libre, donc \texttt{D} est retenu, puis sa réservation est faite
+dans Placement.
+\end{correction}
+
+\begin{exercice}{Diagnostiquer}\label{ex:nova-diag}
+Donner la cause probable et la commande de vérification : (a)~un nœud de calcul tout neuf apparaît \texttt{up} dans
+\texttt{openstack compute service list} mais ne reçoit jamais d'instance ; (b)~une création échoue avec
+\texttt{No valid host was found} alors que les hôtes sont peu chargés, pour un gabarit qui exige
+\texttt{trait:HW\_CPU\_X86\_AVX2=required}.
+\end{exercice}
+\begin{correction}
+(a)~L'hôte n'est pas découvert dans la cellule : \texttt{nova-manage cell\_v2 discover\_hosts --verbose}, ou activer
+\texttt{discover\_hosts\_in\_cells\_interval}. (b)~Aucun fournisseur n'expose le trait demandé : on le vérifie avec
+\texttt{openstack allocation candidate list --resource VCPU=1 --required HW\_CPU\_X86\_AVX2}, qui renvoie alors une liste
+vide (chapitre~\ref{chap:placement}).
+\end{correction}
+
+% ---------------------------------------------------------------------
+\subsection{Récapitulatif du chapitre}\label{sec:nova-recap}
+% ---------------------------------------------------------------------
+
+\begin{aretenir}
+\begin{itemize}
+  \item Nova gère le cycle de vie des instances mais ne les exécute pas : il pilote l'hyperviseur (KVM/QEMU) par
+        libvirt, sur chaque nœud de calcul.
+  \item Un gabarit fixe la taille de l'instance ; ses propriétés \texttt{resources:} et \texttt{trait:} deviennent une
+        requête vers Placement.
+  \item \texttt{nova-api} accepte la requête, \texttt{nova-scheduler} choisit l'hôte, \texttt{nova-conductor}
+        coordonne, \texttt{nova-compute} agit sur l'hyperviseur ; tous échangent par le bus de messages.
+  \item Les nœuds de calcul n'accèdent pas à la base : ils passent par le conductor. Les cellules répartissent
+        bases et files ; \texttt{cell0} garde les échecs de placement.
+  \item L'ordonnancement enchaîne Placement (ressources), filtres (accepter ou rejeter), pondérateurs (noter) et
+        réservation ; un échec de réservation ou de construction fait essayer un hôte de repli.
+  \item La création est asynchrone : l'API répond \texttt{202}, l'instance reste \texttt{BUILD} puis devient
+        \texttt{ACTIVE} ou \texttt{ERROR}.
+  \item Un nouveau nœud de calcul doit être découvert dans sa cellule avant de recevoir des instances.
+\end{itemize}
+\end{aretenir}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{4.2cm}>{\raggedright\arraybackslash}p{9.9cm}r@{}}
+\toprule
+\textbf{Tâche} & \textbf{Commande} & \textbf{§} \\
+\midrule
+Créer une instance & \texttt{openstack server create --flavor F --image I --network N vm} & \ref{sec:nova-creation} \\
+Créer un gabarit & \texttt{openstack flavor create --vcpus 2 --ram 4096 --disk 20 NOM} & \ref{sec:nova-concepts} \\
+Contraindre le placement & \texttt{openstack server group create --policy anti-affinity G} & \ref{sec:nova-ordonnancement} \\
+Migrer à chaud & \texttt{openstack server migrate vm --live-migration --host H} & \ref{sec:nova-cycle} \\
+Initialiser les cellules & \texttt{nova-manage api\_db sync}, \texttt{cell\_v2 map\_cell0}, \texttt{create\_cell}, \texttt{db sync} & \ref{sec:nova-deploiement} \\
+Déclarer un nœud de calcul & \texttt{nova-manage cell\_v2 discover\_hosts --verbose} & \ref{sec:nova-deploiement} \\
+Voir les services & \texttt{openstack compute service list} & \ref{sec:nova-deploiement} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\begin{savoirfaire}
+\begin{itemize}
+  \item Situer chaque composant de Nova et dire par où passe une requête de création
+        (exercice~\ref{ex:nova-roles}).
+  \item Prévoir quel hôte l'ordonnanceur retient, à partir des filtres et des pondérateurs
+        (exercice~\ref{ex:nova-hote}).
+  \item Diagnostiquer un nœud non découvert ou une absence d'hôte valide (exercice~\ref{ex:nova-diag}).
+\end{itemize}
+\end{savoirfaire}
